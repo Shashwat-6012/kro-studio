@@ -1,0 +1,11 @@
+services:
+  kro-studio:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      KUBECONFIG: /home/app/.kube/config
+    volumes:
+      - ${KUBECONFIG_PATH:?Set KUBECONFIG_PATH to your kubeconfig path}:/home/app/.kube/config:ro
