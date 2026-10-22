@@ -134,18 +134,31 @@ public sealed class ResourceGraphDefinitionService(KubernetesClientFactory clien
 
     private static string Readiness(JsonElement item)
     {
-        if (!item.TryGetProperty("status", out JsonElement status) || !status.TryGetProperty("conditions", out JsonElement conditions) || conditions.ValueKind != JsonValueKind.Array)
+        if (!item.TryGetProperty("status", out JsonElement status))
         {
             return "Processing";
         }
-        foreach (JsonElement condition in conditions.EnumerateArray())
+        if (status.TryGetProperty("conditions", out JsonElement conditions) && conditions.ValueKind == JsonValueKind.Array)
         {
-            if (condition.TryGetProperty("type", out JsonElement type) && type.GetString() is "Ready" or "ConditionReady")
+            foreach (JsonElement condition in conditions.EnumerateArray())
             {
-                return condition.TryGetProperty("status", out JsonElement value) && value.GetString() == "True" ? "Ready" : "Processing";
+                if (condition.TryGetProperty("type", out JsonElement type) && type.GetString() is "Ready" or "ConditionReady")
+                {
+                    if (!condition.TryGetProperty("status", out JsonElement value))
+                    {
+                        return "Processing";
+                    }
+                    return value.GetString() switch
+                    {
+                        "True" => "Ready",
+                        "False" => "Failed",
+                        _ => "Processing"
+                    };
+                }
             }
         }
-        return "Processing";
+
+        return status.TryGetProperty("state", out JsonElement state) && state.GetString() == "Inactive" ? "Failed" : "Processing";
     }
 }
 
