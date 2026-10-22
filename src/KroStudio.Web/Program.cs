@@ -1,6 +1,7 @@
 using KroStudio.Web.Features.Connection;
 using KroStudio.Web.Features.GeneratedApis;
 using KroStudio.Web.Features.Instances;
+using KroStudio.Web.Features.RbacAdvisor;
 using KroStudio.Web.Features.ResourceGraphDefinitions;
 using KroStudio.Web.Infrastructure.Errors;
 using KroStudio.Web.Infrastructure.Kubernetes;
@@ -20,6 +21,7 @@ builder.Services.AddSingleton<KroInstallationService>();
 builder.Services.AddSingleton<ResourceGraphDefinitionService>();
 builder.Services.AddSingleton<GeneratedApiResolver>();
 builder.Services.AddSingleton<InstanceService>();
+builder.Services.AddSingleton<RbacAdvisorService>();
 
 WebApplication app = builder.Build();
 
@@ -39,6 +41,7 @@ api.MapConnectionEndpoints();
 api.MapResourceGraphDefinitionEndpoints();
 api.MapGeneratedApiEndpoints();
 api.MapInstanceEndpoints();
+api.MapRbacAdvisorEndpoints();
 app.Run();
 
 /// <summary>Provides the application entry point for integration hosting.</summary>

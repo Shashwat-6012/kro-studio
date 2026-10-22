@@ -25,7 +25,7 @@ public sealed class GeneratedApiResolver(KubernetesClientFactory clientFactory)
         }
         if (string.IsNullOrWhiteSpace(group))
         {
-            throw new InvalidOperationException("The generated API group is not declared on the RGD and cannot be resolved safely.");
+            group = "kro.run";
         }
 
         object rawResources = await client.CustomObjects.GetAPIResourcesAsync(group, apiVersion, cancellationToken).ConfigureAwait(false);
