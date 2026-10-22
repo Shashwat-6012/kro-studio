@@ -55,17 +55,8 @@ public sealed class KroInstallationService(KubernetesClientFactory clientFactory
             throw new InvalidOperationException("The official KRO release manifest was empty.");
         }
 
-        try
-        {
-            await kubernetes.CoreV1.CreateNamespaceAsync(new k8s.Models.V1Namespace { Metadata = new k8s.Models.V1ObjectMeta { Name = "kro-system" } }, cancellationToken: cancellationToken).ConfigureAwait(false);
-        }
-        catch (KubernetesException exception) when (exception.Status?.Code == 409)
-        {
-            // The namespace is already present.
-        }
-
         Dictionary<string, IReadOnlyDictionary<string, ApiResource>> discovery = new(StringComparer.Ordinal);
-        int applied = 0;
+        List<InstallResource> resourcesToApply = [];
         foreach (YamlDocument document in stream.Documents)
         {
             if (document.RootNode is not YamlMappingNode root) continue;
@@ -84,11 +75,9 @@ public sealed class KroInstallationService(KubernetesClientFactory clientFactory
             string key = $"{group}/{version}";
             if (!discovery.TryGetValue(key, out IReadOnlyDictionary<string, ApiResource>? resources))
             {
-                if (group.Length == 0)
-                {
-                    throw new InvalidOperationException("The KRO release manifest contains an unsupported core API object.");
-                }
-                resources = await DiscoverAsync(kubernetes, group, version, cancellationToken).ConfigureAwait(false);
+                resources = group.Length == 0
+                    ? await DiscoverCoreAsync(kubernetes, version, cancellationToken).ConfigureAwait(false)
+                    : await DiscoverAsync(kubernetes, group, version, cancellationToken).ConfigureAwait(false);
                 discovery.Add(key, resources);
             }
 
@@ -102,20 +91,53 @@ public sealed class KroInstallationService(KubernetesClientFactory clientFactory
                 throw new InvalidOperationException($"The KRO manifest did not specify a namespace for {kind}/{name}.");
             }
 
-            using StringWriter yamlWriter = new();
-            new YamlStream(new[] { document }).Save(yamlWriter, assignAnchors: false);
+            resourcesToApply.Add(new InstallResource(document.RootNode, group, version, resource, ns, name));
+        }
 
-            object patch = new V1Patch(ToJson(document.RootNode), V1Patch.PatchType.ApplyPatch);
-            
-            if (resource.Namespaced)
+        // Validate the complete manifest and discover every API before making any cluster changes.
+        try
+        {
+            await kubernetes.CoreV1.CreateNamespaceAsync(new V1Namespace { Metadata = new V1ObjectMeta { Name = "kro-system" } }, cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (KubernetesException exception) when (exception.Status?.Code == 409)
+        {
+            // Retrying an install after a partial run leaves this namespace in place.
+        }
+        catch (k8s.Autorest.HttpOperationException exception) when (exception.Response?.StatusCode == System.Net.HttpStatusCode.Conflict)
+        {
+            // The typed Kubernetes client reports create conflicts as HttpOperationException
+            // on some operations, rather than KubernetesException with a populated Status.
+            // A pre-existing namespace is safe: manifest resources are applied below via SSA.
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw new KroInstallationException(0, "creating the kro-system namespace", null, exception);
+        }
+
+        int applied = 0;
+        foreach (InstallResource resource in resourcesToApply)
+        {
+            V1Patch patch = new(ToJson(resource.Manifest), V1Patch.PatchType.ApplyPatch);
+            try
             {
-                await kubernetes.CustomObjects.PatchNamespacedCustomObjectAsync(patch, group, version, ns, resource.Name, name, fieldManager: "kro-studio", cancellationToken: cancellationToken).ConfigureAwait(false);
+                if (resource.Group.Length == 0)
+                {
+                    await ApplyCoreResourceAsync(kubernetes, patch, resource, cancellationToken).ConfigureAwait(false);
+                }
+                else if (resource.ApiResource.Namespaced)
+                {
+                    await kubernetes.CustomObjects.PatchNamespacedCustomObjectAsync(patch, resource.Group, resource.Version, resource.Namespace, resource.ApiResource.Name, resource.Name, fieldManager: "kro-studio", cancellationToken: cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    await kubernetes.CustomObjects.PatchClusterCustomObjectAsync(patch, resource.Group, resource.Version, resource.ApiResource.Name, resource.Name, fieldManager: "kro-studio", cancellationToken: cancellationToken).ConfigureAwait(false);
+                }
+                applied++;
             }
-            else
+            catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                await kubernetes.CustomObjects.PatchClusterCustomObjectAsync(patch, group, version, resource.Name, name, fieldManager: "kro-studio", cancellationToken: cancellationToken).ConfigureAwait(false);
+                throw new KroInstallationException(applied, "applying the release manifest", $"{resource.ApiResource.Kind}/{resource.Name}", exception);
             }
-            applied++;
         }
 
         return new KroInstallationResult(false, Version, applied, $"Applied {applied} KRO resources. The controller is starting; refresh cluster status in a few moments.");
@@ -136,11 +158,59 @@ public sealed class KroInstallationService(KubernetesClientFactory clientFactory
         return resources;
     }
 
+    private static async Task<IReadOnlyDictionary<string, ApiResource>> DiscoverCoreAsync(Kubernetes client, string version, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(version, "v1", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"The KRO release manifest uses unsupported core API version '{version}'.");
+        }
+
+        object response = await client.CoreV1.GetAPIResourcesAsync(cancellationToken).ConfigureAwait(false);
+        using JsonDocument document = JsonDocument.Parse(KubernetesJson.Serialize(response));
+        Dictionary<string, ApiResource> resources = new(StringComparer.Ordinal);
+        foreach (JsonElement item in document.RootElement.GetProperty("resources").EnumerateArray())
+        {
+            if (item.TryGetProperty("name", out JsonElement name) && name.GetString()?.Contains('/', StringComparison.Ordinal) == true) continue;
+            if (!item.TryGetProperty("kind", out JsonElement kind) || !item.TryGetProperty("namespaced", out JsonElement namespaced)) continue;
+            string? plural = item.TryGetProperty("name", out JsonElement resourceName) ? resourceName.GetString() : null;
+            if (plural is not null) resources[plural] = new ApiResource(plural, kind.GetString() ?? string.Empty, namespaced.GetBoolean());
+        }
+        return resources;
+    }
+
+    private static Task ApplyCoreResourceAsync(Kubernetes client, V1Patch patch, InstallResource resource, CancellationToken cancellationToken)
+    {
+        // KubernetesClient exposes core resources through typed operations; custom-object routes
+        // use /apis and are not valid for the core /api/v1 endpoint.
+        if (resource.ApiResource.Namespaced)
+        {
+            return resource.ApiResource.Kind switch
+            {
+                "ConfigMap" => Patch(client.CoreV1.PatchNamespacedConfigMapAsync(patch, resource.Name, resource.Namespace, fieldManager: "kro-studio", cancellationToken: cancellationToken)),
+                "Secret" => Patch(client.CoreV1.PatchNamespacedSecretAsync(patch, resource.Name, resource.Namespace, fieldManager: "kro-studio", cancellationToken: cancellationToken)),
+                "Service" => Patch(client.CoreV1.PatchNamespacedServiceAsync(patch, resource.Name, resource.Namespace, fieldManager: "kro-studio", cancellationToken: cancellationToken)),
+                "ServiceAccount" => Patch(client.CoreV1.PatchNamespacedServiceAccountAsync(patch, resource.Name, resource.Namespace, fieldManager: "kro-studio", cancellationToken: cancellationToken)),
+                _ => throw new InvalidOperationException($"The KRO release manifest contains unsupported core resource kind '{resource.ApiResource.Kind}'.")
+            };
+        }
+
+        return resource.ApiResource.Kind switch
+        {
+            "Namespace" => Patch(client.CoreV1.PatchNamespaceAsync(patch, resource.Name, fieldManager: "kro-studio", cancellationToken: cancellationToken)),
+            "PersistentVolume" => Patch(client.CoreV1.PatchPersistentVolumeAsync(patch, resource.Name, fieldManager: "kro-studio", cancellationToken: cancellationToken)),
+            _ => throw new InvalidOperationException($"The KRO release manifest contains unsupported core resource kind '{resource.ApiResource.Kind}'.")
+        };
+
+        static async Task Patch<T>(Task<T> request) => _ = await request.ConfigureAwait(false);
+    }
+
     private static string Scalar(YamlMappingNode node, string key) => node.Children.TryGetValue(new YamlScalarNode(key), out YamlNode? value) && value is YamlScalarNode scalar ? scalar.Value ?? string.Empty : string.Empty;
 
     private static string NestedScalar(YamlMappingNode node, string parent, string key) => node.Children.TryGetValue(new YamlScalarNode(parent), out YamlNode? value) && value is YamlMappingNode mapping ? Scalar(mapping, key) : string.Empty;
 
     private sealed record ApiResource(string Name, string Kind, bool Namespaced);
+
+    private sealed record InstallResource(YamlNode Manifest, string Group, string Version, ApiResource ApiResource, string Namespace, string Name);
 
     private static string ToJson(YamlNode node)
     {
@@ -189,6 +259,20 @@ public sealed class KroInstallationService(KubernetesClientFactory clientFactory
         else if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double d) && double.IsFinite(d)) w.WriteNumberValue(d);
         else w.WriteStringValue(value);
     }
+}
+
+/// <summary>Provides safe progress context when a KRO install stops partway through.</summary>
+public sealed class KroInstallationException(int resourcesApplied, string stage, string? resource, Exception innerException)
+    : Exception($"KRO installation failed while {stage}.", innerException)
+{
+    /// <summary>Gets the number of manifest resources successfully applied before the failure.</summary>
+    public int ResourcesApplied { get; } = resourcesApplied;
+
+    /// <summary>Gets the installation stage that failed.</summary>
+    public string Stage { get; } = stage;
+
+    /// <summary>Gets the manifest resource being processed when the failure occurred.</summary>
+    public string? Resource { get; } = resource;
 }
 
 /// <summary>Summarizes the result of a KRO installation request.</summary>

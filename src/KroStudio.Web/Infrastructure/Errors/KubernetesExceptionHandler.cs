@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
+using KroStudio.Web.Features.Connection;
 
 namespace KroStudio.Web.Infrastructure.Errors;
 
@@ -34,6 +35,15 @@ public sealed class KubernetesExceptionHandler(ILogger<KubernetesExceptionHandle
 
     private static (int StatusCode, string Title, string Detail, string Code) Map(Exception exception)
     {
+        if (exception is KroInstallationException installationException)
+        {
+            (int statusCode, string title, string detail, string code) = Map(installationException.InnerException ?? installationException);
+            string progress = installationException.ResourcesApplied == 0
+                ? "No KRO manifest resources were fully applied."
+                : $"{installationException.ResourcesApplied} KRO manifest resource(s) were applied before the failure.";
+            string failedResource = installationException.Resource is null ? string.Empty : $" Failed at {installationException.Resource}.";
+            return (statusCode, title, $"KRO installation stopped while {installationException.Stage}.{failedResource} {progress} The install can be retried; already-present resources are handled by server-side apply. {detail}", code);
+        }
         if (exception is ArgumentException)
         {
             return (StatusCodes.Status400BadRequest, "Invalid request", exception.Message, "invalid_request");
