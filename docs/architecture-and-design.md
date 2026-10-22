@@ -144,6 +144,7 @@ For composed-resource inspection, query only resource types declared by the matc
 - **Generated API resolver:** Link an RGD to its generated CRD/API using cluster discovery and verified metadata. Gate instance creation until the API is established and discoverable.
 - **Instance service:** List, create, read, update, and delete custom resources using the resolved API and its discovered scope.
 - **Status and composition inspection:** Surface conditions and events and discover composed resources only through reliable ownership or KRO-supported metadata.
+- **RBAC advisor:** Evaluate the configured studio identity against the operations the selected workflow needs, and diagnose the separate KRO controller identity using RGD status/events plus optional subject access reviews or a clearly labeled RBAC-rule estimate. Preserve the evidence and uncertainty for every result; never grant permissions automatically.
 - **Error and authorization mapping:** Present Kubernetes forbidden, conflict, timeout, unavailable, and validation failures clearly without weakening RBAC or exposing credentials.
 
 ### Current backend implementation boundary
@@ -153,6 +154,7 @@ The Web project is an API-only process. It does not load or serve React assets a
 ### Frontend areas
 
 - **Connection shell:** Active cluster identity, connection state, and KRO capability status.
+- **RBAC advisor:** A cluster access view for studio permissions and a separate controller permissions panel on RGD details. Findings identify the principal, action, resource, scope, evidence, and reviewable remediation.
 - **RGD catalog:** Searchable list with health/readiness, generated API availability, and links to detail pages.
 - **RGD detail:** Overview, schema, resources/graph, instances, YAML, and conditions/events.
 - **RGD editor:** Guided metadata/schema entry plus YAML editing and manifest preview.
@@ -232,6 +234,7 @@ The exact kubeconfig mount UX remains an implementation decision. The local MVP 
 Use the versioned backend API under `/api/v1`; the UI calls the configured API origin:
 
 - `GET /connection` and `GET /capabilities` for connection and feature readiness.
+- An RBAC advisor route group for permission checks and controller diagnostics. Checks are scoped to requested studio features or a selected RGD, and return allowed/denied/unknown with evidence rather than a single all-clear flag.
 - `/rgds` for RGD list/read/create/update/delete operations.
 - `POST /rgds/validate` for supported non-persisting validation checks.
 - `/rgds/{name}/api` to resolve generated API information and `/rgds/{name}/instances` for the RGD-associated collection.
@@ -242,6 +245,8 @@ These application routes are not Kubernetes routes. The backend resolves resourc
 ## 7. MVP boundary and later work
 
 **Included in MVP:** existing RGD visualization, RGD create/edit/validation, generated API discovery, schema-driven custom resource creation, instance monitoring, and read-only composed-resource inspection.
+
+**RBAC advisor:** checks the studio kubeconfig identity and separately diagnoses the KRO controller identity. For controller RBAC, it previews narrowly scoped resource rules, shows that the current binding is cluster-wide, and requires explicit review before creating missing managed objects. Evidence and authorization limits are defined in [authentication and RBAC design](authentication-and-rbac.md).
 
 **Deferred:** interactive graph editing, multi-cluster fleet management, Git provider workflows, compatibility analysis/revision history, broad generic Kubernetes management, and hosted SaaS operation.
 

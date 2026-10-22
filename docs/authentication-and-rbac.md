@@ -169,6 +169,35 @@ KRO Studio should classify failures as follows:
 
 The backend must not translate `Forbidden` into an empty list, silently fall back to a different credential, or mark incomplete observations as healthy. A read failure on optional events or a child resource should not erase a successfully retrieved RGD or instance.
 
+### 6.1 RBAC advisor
+
+KRO Studio should provide an RBAC advisor that reports whether the configured Kubernetes identity can perform the operations exposed by the current studio workflow, and separately diagnoses whether KRO's controller appears able to reconcile a selected RGD. These are different identities and must be shown as separate checks:
+
+1. **Studio access:** the identity loaded from the runtime kubeconfig. Check the API operations KRO Studio itself needs, such as discovering APIs, reading RGDs, validating and writing RGDs, reading generated instances, and inspecting supported composed resources. Report each operation as allowed, denied, or unknown, with its verb, API group/resource, and namespace or cluster scope.
+2. **Controller access:** the KRO controller service account (normally `kro-system:kro`) and the operations implied by a stored RGD. For example, a generated `webapps.kro.run` API needs controller read/watch access to its instances; resource templates may require create, get, list, watch, update, patch, or delete on their composed resource types. Report these findings independently of the studio's kubeconfig permissions.
+
+The advisor should run after connecting, when an RGD is applied or its conditions fail, and on demand from the RGD detail/status view. It should explain what was checked, which checks could not be completed, and the evidence behind each finding. A useful controller finding links the failed RGD condition or event (for example, informer `403 Forbidden` / cache sync timeout) to the implicated resource rule and scope. Do not collapse a partial or unknown result into “permissions are fine.”
+
+#### Checking the studio identity
+
+Use Kubernetes authorization review APIs for explicit probes where available, such as `SelfSubjectAccessReview` for the configured caller. Probe only the finite permission matrix for the selected feature and resolved API scope; do not ask users for credentials or send kubeconfig data to the browser. `SelfSubjectRulesReview` may help summarize namespace rules but its result can be incomplete and is not proof that every operation is allowed. The actual operation remains authoritative: a later `403` updates the relevant finding to denied and preserves the exact attempted verb/resource/scope when safe.
+
+#### Checking the controller identity
+
+The controller check must not pretend the studio's own `SelfSubjectAccessReview` answers for KRO. Prefer evidence in this order:
+
+- Read the RGD's KRO conditions, related events, and (when permitted) controller logs for explicit authorization failures.
+- When the studio identity is authorized to create `SubjectAccessReview` objects, ask the API server to evaluate the specific controller service-account subject and each derived action. This optional capability must be detected and explained; do not require it for ordinary studio operation.
+- Otherwise, inspect the controller service account's RoleBindings/ClusterRoleBindings and referenced Role/ClusterRole rules, then compare those grants with actions derived from the RGD. Label this as an RBAC configuration estimate, not a definitive authorization decision: aggregated roles, external authorizers, admission behavior, or policy changes may make the effective result differ.
+
+The advisor must identify the controller service account and namespace from the installed KRO workload/configuration when possible. If it cannot identify them reliably, ask the user to select or confirm the subject in the UI and show the assumption. A failure to read RBAC objects or logs is “unknown,” not “denied” or “allowed.” Never infer controller permissions from the studio identity's grants.
+
+#### Results and remediation
+
+Each finding should include identity, check, status (`allowed`, `denied`, `unknown`, or `observed failure`), required action, resource API group/name, scope, evidence/source, and a suggested least-privilege remediation. Distinguish a proven API-server review result from static Role rule analysis and from an observed controller error. The controller RBAC workflow previews the exact `ClusterRole` and `ClusterRoleBinding`, shows their all-namespace impact and manifest, then requires an explicit user checkbox before applying. It creates only missing, studio-labeled objects; existing mismatched objects are never overwritten. The apply request is rejected if the plan changed since review. It does not edit or delete existing roles or service accounts. Avoid wildcard permissions and never recommend Secret reads as a generic composed-resource permission.
+
+The advisor is diagnostic, not a security boundary. Its output is time-sensitive and can become stale when bindings, admission policy, API discovery, or the RGD changes. Display when checks ran and provide a recheck action. A complete success means only that the checked operations were authorized at that time; it does not prove that KRO can successfully reconcile every valid RGD.
+
 ## 7. Implementation sequence / story breakdown
 
 The initial vertical slice for Kubernetes server authentication should follow this order:
@@ -179,7 +208,8 @@ The initial vertical slice for Kubernetes server authentication should follow th
 4. Add typed handling for Kubernetes `Unauthorized` and `Forbidden` responses, including operation/resource metadata where safe.
 5. Verify read-only RGD discovery, then add RGD dry-run/write and dynamic instance operations using the same client identity.
 6. Document and exercise minimum RBAC profiles against a disposable cluster, including read-only, missing permission, namespace-bound, and cluster-scoped cases.
-7. Before any shared deployment mode, implement and document user authentication, deployment identity mapping, session protections, and an explicit policy for shared service-account access.
+7. The implemented RBAC advisor probes the studio identity, checks controller requirements derived from RGD API discovery, reads RGD conditions/events, and falls back to an explicitly labeled RBAC rule estimate when controller SubjectAccessReview is unavailable.
+8. Before any shared deployment mode, implement and document user authentication, deployment identity mapping, session protections, and an explicit policy for shared service-account access.
 
 ## 8. Out of scope for the MVP
 
@@ -187,7 +217,7 @@ The initial vertical slice for Kubernetes server authentication should follow th
 - Browser-held Kubernetes credentials, direct browser-to-cluster API calls, or kubeconfig upload.
 - Kubernetes impersonation, token exchange, or per-user credential brokering.
 - A shared in-cluster service account deployment advertised as secure for multiple users.
-- Automatic installation or mutation of RBAC grants by KRO Studio.
+- Automatic RBAC changes without a reviewed plan and explicit confirmation; editing or deleting existing RBAC objects.
 - Broad arbitrary resource management beyond the documented KRO workflows.
 
 ## 9. References
