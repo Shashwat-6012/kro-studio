@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Net;
 using k8s;
+using k8s.Models;
 using KroStudio.Web.Infrastructure.Kubernetes;
 
 namespace KroStudio.Web.Features.RbacAdvisor;
@@ -37,11 +38,12 @@ internal sealed class RbacAdvisorService(KubernetesClientFactory clientFactory)
         new("Inspect namespace role bindings", "list", RbacGroup, "rolebindings", null),
         new("Inspect namespace roles", "list", RbacGroup, "roles", null),
         new("Create controller roles", "create", RbacGroup, "clusterroles", null),
+          new("Update controller roles", "patch", RbacGroup, "clusterroles", null),
         new("Create controller role bindings", "create", RbacGroup, "clusterrolebindings", null)
     ];
 
     /// <summary>Checks the configured identity and, optionally, a selected RGD's controller requirements.</summary>
-    public async Task<RbacAdvisorReport> CheckAsync(string? definitionName, string? instanceNamespace, CancellationToken cancellationToken)
+    public async Task<RbacAdvisorReport> CheckAsync(string? definitionName, string? instanceNamespace, string? instanceName, CancellationToken cancellationToken)
     {
         Kubernetes client = clientFactory.GetClient();
         List<RbacFinding> studio = [];
@@ -64,7 +66,7 @@ internal sealed class RbacAdvisorService(KubernetesClientFactory clientFactory)
                     RbacFinding finding = await CheckSubjectAsync(client, requirement, $"system:serviceaccount:{KroNamespace}:{KroServiceAccount}", cancellationToken).ConfigureAwait(false);
                     controller.Add(finding);
                 }
-                controller.AddRange(await FindObservedFailuresAsync(client, definition, cancellationToken).ConfigureAwait(false));
+                controller.AddRange(await FindObservedFailuresAsync(client, definition, instanceNamespace, instanceName, cancellationToken).ConfigureAwait(false));
             }
             catch (Exception exception) when (exception is KubernetesException or k8s.Autorest.HttpOperationException or InvalidOperationException or KeyNotFoundException or JsonException)
             {
@@ -100,28 +102,28 @@ internal sealed class RbacAdvisorService(KubernetesClientFactory clientFactory)
         string prefix = $"kro-studio-{Sanitize(metadataName)}-{suffix}";
         object clusterRole = BuildClusterRole($"{prefix}-controller", metadataName, requirements);
         object clusterRoleBinding = BuildClusterRoleBinding($"{prefix}-controller", $"{prefix}-controller", metadataName);
-        (bool roleExists, bool roleManaged, bool roleMatches, bool roleInspectable) = await InspectExistingAsync(client, "clusterroles", $"{prefix}-controller", requirements, cancellationToken).ConfigureAwait(false);
+        (bool roleExists, bool roleManaged, bool roleMatches, bool roleInspectable, bool roleCanUpdate, string? roleResourceVersion) = await InspectExistingAsync(client, "clusterroles", $"{prefix}-controller", metadataName, requirements, cancellationToken).ConfigureAwait(false);
         (bool bindingExists, bool bindingManaged, bool bindingMatches, bool bindingInspectable) = await InspectBindingAsync(client, $"{prefix}-controller", cancellationToken).ConfigureAwait(false);
-        string planToken = CreatePlanToken(clusterRole, clusterRoleBinding);
+        string planToken = CreatePlanToken(clusterRole, clusterRoleBinding, roleResourceVersion);
         string subjectNote = serviceAccountVerified ? string.Empty : " The configured identity cannot read service accounts, so existence of kro-system:kro could not be confirmed; the binding target will still be exactly that subject.";
-        string inspectNote = roleInspectable && bindingInspectable ? string.Empty : " Existing RBAC could not be fully inspected. Apply will use create operations only; Kubernetes will reject a name conflict, and the studio will not update existing objects. If a later create fails, an earlier object may already have been created. See the error and review the cluster before retrying.";
+        string inspectNote = roleInspectable && bindingInspectable ? string.Empty : " Existing RBAC could not be fully inspected. Apply will use create operations only; Kubernetes will reject a name conflict, and the studio will not update existing objects it could not inspect. If a later create fails, an earlier object may already have been created. See the error and review the cluster before retrying.";
         return new RbacApplyPlan(metadataName, $"{KroNamespace}:{KroServiceAccount}", serviceAccountVerified, planToken, requirements,
-            new PlannedRbacObject("ClusterRole", $"{prefix}-controller", clusterRole, roleExists, roleManaged, roleMatches, roleInspectable),
-            new PlannedRbacObject("ClusterRoleBinding", $"{prefix}-controller", clusterRoleBinding, bindingExists, bindingManaged, bindingMatches, bindingInspectable),
+            new PlannedRbacObject("ClusterRole", $"{prefix}-controller", clusterRole, roleExists, roleManaged, roleMatches, roleInspectable, roleCanUpdate, roleResourceVersion),
+            new PlannedRbacObject("ClusterRoleBinding", $"{prefix}-controller", clusterRoleBinding, bindingExists, bindingManaged, bindingMatches, bindingInspectable, false, null),
             "This grants the KRO service account the listed verbs on the generated API and resource kinds in every namespace. Cluster-scoped resources are included only when the RGD declares them. Review the manifest before applying." + subjectNote + inspectNote);
     }
 
-    /// <summary>Creates missing planned controller RBAC objects after the caller's explicit confirmation.</summary>
+    /// <summary>Creates missing planned controller RBAC objects and safely extends managed roles after explicit confirmation.</summary>
     public async Task<RbacApplyResult> ApplyControllerRbacAsync(string definitionName, string? instanceNamespace, bool confirmed, string planToken, CancellationToken cancellationToken)
     {
         if (!confirmed) throw new ArgumentException("Explicit confirmation is required before applying controller RBAC.", nameof(confirmed));
         RbacApplyPlan plan = await PreviewControllerRbacAsync(definitionName, instanceNamespace, cancellationToken).ConfigureAwait(false);
         if (!string.Equals(plan.PlanToken, planToken, StringComparison.Ordinal))
             throw new InvalidOperationException("The RGD or RBAC plan changed after review. Review the updated plan before applying.");
-        if ((plan.ClusterRole.Exists && (!plan.ClusterRole.ManagedByStudio || !plan.ClusterRole.MatchesPlan)) ||
+        if ((plan.ClusterRole.Exists && (!plan.ClusterRole.ManagedByStudio || (!plan.ClusterRole.MatchesPlan && !plan.ClusterRole.CanUpdate))) ||
             (plan.ClusterRoleBinding.Exists && (!plan.ClusterRoleBinding.ManagedByStudio || !plan.ClusterRoleBinding.MatchesPlan)))
         {
-            throw new InvalidOperationException("An RBAC object with the planned name already exists and does not match this studio-managed plan. No cluster changes were made.");
+            throw new InvalidOperationException("An RBAC object with the planned name already exists and cannot be safely updated by this plan. No cluster changes were made.");
         }
 
         Kubernetes client = clientFactory.GetClient();
@@ -131,12 +133,23 @@ internal sealed class RbacAdvisorService(KubernetesClientFactory clientFactory)
             await client.CustomObjects.CreateClusterCustomObjectAsync(plan.ClusterRole.Manifest, RbacGroup, RbacVersion, "clusterroles", cancellationToken: cancellationToken).ConfigureAwait(false);
             created.Add($"ClusterRole/{plan.ClusterRole.Name}");
         }
+        else if (plan.ClusterRole.CanUpdate)
+        {
+            using JsonDocument roleManifest = JsonDocument.Parse(KubernetesJson.Serialize(plan.ClusterRole.Manifest));
+            string patch = JsonSerializer.Serialize(new
+            {
+                metadata = new { resourceVersion = plan.ClusterRole.ResourceVersion },
+                rules = roleManifest.RootElement.GetProperty("rules")
+            });
+            await client.CustomObjects.PatchClusterCustomObjectAsync(new V1Patch(patch, V1Patch.PatchType.MergePatch), RbacGroup, RbacVersion, "clusterroles", plan.ClusterRole.Name, cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
         if (!plan.ClusterRoleBinding.Exists)
         {
             await client.CustomObjects.CreateClusterCustomObjectAsync(plan.ClusterRoleBinding.Manifest, RbacGroup, RbacVersion, "clusterrolebindings", cancellationToken: cancellationToken).ConfigureAwait(false);
             created.Add($"ClusterRoleBinding/{plan.ClusterRoleBinding.Name}");
         }
-        return new RbacApplyResult(created, created.Count == 0 ? "The matching controller RBAC objects already exist; no changes were made." : $"Created {created.Count} controller RBAC object(s). KRO can now retry reconciliation.");
+        int updated = plan.ClusterRole.CanUpdate ? 1 : 0;
+        return new RbacApplyResult(created, created.Count == 0 && updated == 0 ? "The matching controller RBAC objects already exist; no changes were made." : $"Created {created.Count} and updated {updated} controller RBAC object(s). KRO can now retry reconciliation.");
     }
 
     private static async Task<RbacFinding> CheckSubjectAsync(Kubernetes client, PermissionRequirement requirement, string? subject, CancellationToken token)
@@ -304,10 +317,13 @@ internal sealed class RbacAdvisorService(KubernetesClientFactory clientFactory)
         string generatedPlural = generatedResource.GetProperty("name").GetString()!;
         bool generatedNamespaced = generatedResource.GetProperty("namespaced").GetBoolean();
         string? generatedNamespace = generatedNamespaced ? instanceNamespace : null;
+        results.Add(new PermissionRequirement("Read generated instances", "get", group, generatedPlural, generatedNamespace));
+        results.Add(new PermissionRequirement("Patch generated instances", "patch", group, generatedPlural, generatedNamespace));
         results.Add(new PermissionRequirement("Watch generated instances", "list", group, generatedPlural, generatedNamespace));
         results.Add(new PermissionRequirement("Watch generated instances", "watch", group, generatedPlural, generatedNamespace));
         foreach (string verb in new[] { "get", "update", "patch" })
             results.Add(new PermissionRequirement("Update generated instance status", verb, group, $"{generatedPlural}/status", generatedNamespace));
+        results.Add(new PermissionRequirement("Update generated instance finalizers", "update", group, $"{generatedPlural}/finalizers", generatedNamespace));
 
         if (definition.GetProperty("spec").TryGetProperty("resources", out JsonElement resources) && resources.ValueKind == JsonValueKind.Array)
         {
@@ -352,7 +368,7 @@ internal sealed class RbacAdvisorService(KubernetesClientFactory clientFactory)
         return selectedNamespace;
     }
 
-    private static async Task<List<RbacFinding>> FindObservedFailuresAsync(Kubernetes client, JsonElement definition, CancellationToken token)
+    private static async Task<List<RbacFinding>> FindObservedFailuresAsync(Kubernetes client, JsonElement definition, string? instanceNamespace, string? instanceName, CancellationToken token)
     {
         Dictionary<string, RbacFinding> findings = new(StringComparer.OrdinalIgnoreCase);
         if (definition.TryGetProperty("status", out JsonElement status) && status.TryGetProperty("conditions", out JsonElement conditions) && conditions.ValueKind == JsonValueKind.Array)
@@ -365,39 +381,96 @@ internal sealed class RbacAdvisorService(KubernetesClientFactory clientFactory)
         }
         if (definition.TryGetProperty("metadata", out JsonElement metadata) && metadata.TryGetProperty("uid", out JsonElement uidValue) && !string.IsNullOrWhiteSpace(uidValue.GetString()))
         {
-            try
+            await AddObjectEventsAsync(client, uidValue.GetString()!, KroNamespace, findings, token).ConfigureAwait(false);
+        }
+
+        if (!string.IsNullOrWhiteSpace(instanceName))
+        {
+            JsonElement schema = definition.GetProperty("spec").GetProperty("schema");
+            string version = schema.GetProperty("apiVersion").GetString() ?? string.Empty;
+            string group = schema.TryGetProperty("group", out JsonElement groupValue) ? groupValue.GetString() ?? string.Empty : string.Empty;
+            if (version.Contains('/', StringComparison.Ordinal)) { string[] parts = version.Split('/', 2); group = parts[0]; version = parts[1]; }
+            if (string.IsNullOrWhiteSpace(group)) group = "kro.run";
+            string kind = schema.GetProperty("kind").GetString() ?? throw new InvalidOperationException("The RGD generated kind is missing.");
+            JsonElement generatedResource = await FindApiResourceAsync(client, group, version, kind, token).ConfigureAwait(false);
+            string plural = generatedResource.GetProperty("name").GetString()!;
+            bool namespaced = generatedResource.GetProperty("namespaced").GetBoolean();
+            if (namespaced && string.IsNullOrWhiteSpace(instanceNamespace))
             {
-                object raw = await client.CustomObjects.ListNamespacedCustomObjectAsync("", "v1", KroNamespace, "events", fieldSelector: $"involvedObject.uid={uidValue.GetString()}", limit: 50, cancellationToken: token).ConfigureAwait(false);
-                using JsonDocument events = JsonDocument.Parse(KubernetesJson.Serialize(raw));
-                foreach (JsonElement item in events.RootElement.GetProperty("items").EnumerateArray())
+                findings.TryAdd("instance-namespace-required", new RbacFinding("controller", "Inspect selected instance", "unknown", "get", DisplayGroup(group), plural, null, "Enter the namespace for this namespaced generated instance to inspect its condition and events.", "instance inspection"));
+            }
+            else
+            {
+                try
                 {
-                    string message = item.TryGetProperty("message", out JsonElement eventMessage) ? eventMessage.GetString() ?? string.Empty : string.Empty;
-                    string reason = item.TryGetProperty("reason", out JsonElement reasonValue) ? reasonValue.GetString() ?? "Controller event" : "Controller event";
-                    AddObservedFinding(findings, message, "Kubernetes event", KroNamespace, reason);
+                    object raw = namespaced
+                        ? await client.CustomObjects.GetNamespacedCustomObjectAsync(group, version, instanceNamespace!, plural, instanceName, token).ConfigureAwait(false)
+                        : await client.CustomObjects.GetClusterCustomObjectAsync(group, version, plural, instanceName, cancellationToken: token).ConfigureAwait(false);
+                    using JsonDocument instanceJson = JsonDocument.Parse(KubernetesJson.Serialize(raw));
+                    JsonElement instance = instanceJson.RootElement;
+                    string instanceId = namespaced ? $"{instanceNamespace}/{instanceName}" : instanceName;
+                    if (instance.TryGetProperty("status", out JsonElement instanceStatus) && instanceStatus.TryGetProperty("conditions", out JsonElement instanceConditions) && instanceConditions.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (JsonElement condition in instanceConditions.EnumerateArray())
+                        {
+                            string reason = condition.TryGetProperty("reason", out JsonElement reasonValue) ? reasonValue.GetString() ?? string.Empty : string.Empty;
+                            string type = condition.TryGetProperty("type", out JsonElement typeValue) ? typeValue.GetString() ?? string.Empty : string.Empty;
+                            string statusValue = condition.TryGetProperty("status", out JsonElement conditionStatus) ? conditionStatus.GetString() ?? string.Empty : string.Empty;
+                            string message = condition.TryGetProperty("message", out JsonElement messageValue) ? messageValue.GetString() ?? string.Empty : string.Empty;
+                            bool managementFailed = (reason.Equals("ManagementFailed", StringComparison.OrdinalIgnoreCase) || type.Equals("ManagementFailed", StringComparison.OrdinalIgnoreCase)) && statusValue.Equals("False", StringComparison.OrdinalIgnoreCase);
+                            AddObservedFinding(findings, message, "Instance condition", namespaced ? instanceNamespace : null, $"{instanceId}: {(reason.Length > 0 ? reason : type)}", managementFailed);
+                        }
+                    }
+                    if (instance.TryGetProperty("metadata", out JsonElement instanceMetadata) && instanceMetadata.TryGetProperty("uid", out JsonElement instanceUid) && !string.IsNullOrWhiteSpace(instanceUid.GetString()))
+                        await AddObjectEventsAsync(client, instanceUid.GetString()!, namespaced ? instanceNamespace : null, findings, token).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (GetKubernetesStatusCode(exception) is 403 or 404)
+                {
+                    string state = GetKubernetesStatusCode(exception) == 403 ? "unknown" : "observed issue";
+                    string detail = GetKubernetesStatusCode(exception) == 403 ? "The configured identity cannot read this generated instance to inspect its conditions." : $"Generated instance {instanceName} was not found in the selected scope.";
+                    findings.TryAdd($"instance-read|{instanceName}", new RbacFinding("controller", "Inspect selected instance", state, "get", DisplayGroup(group), plural, namespaced ? instanceNamespace : null, detail, "instance inspection"));
                 }
             }
-            catch (Exception exception) when (GetKubernetesStatusCode(exception) is 403 or 404) { }
         }
         return findings.Values.ToList();
     }
 
-    private static void AddObservedFinding(Dictionary<string, RbacFinding> findings, string message, string source, string? @namespace, string? eventReason = null)
+    private static async Task AddObjectEventsAsync(Kubernetes client, string uid, string? @namespace, Dictionary<string, RbacFinding> findings, CancellationToken token)
     {
-        if (string.IsNullOrWhiteSpace(message)) return;
+        try
+        {
+            object raw = @namespace is null
+                ? await client.CustomObjects.ListClusterCustomObjectAsync("", "v1", "events", fieldSelector: $"involvedObject.uid={uid}", limit: 50, cancellationToken: token).ConfigureAwait(false)
+                : await client.CustomObjects.ListNamespacedCustomObjectAsync("", "v1", @namespace, "events", fieldSelector: $"involvedObject.uid={uid}", limit: 50, cancellationToken: token).ConfigureAwait(false);
+            using JsonDocument events = JsonDocument.Parse(KubernetesJson.Serialize(raw));
+            foreach (JsonElement item in events.RootElement.GetProperty("items").EnumerateArray())
+            {
+                string message = item.TryGetProperty("message", out JsonElement eventMessage) ? eventMessage.GetString() ?? string.Empty : string.Empty;
+                string reason = item.TryGetProperty("reason", out JsonElement reasonValue) ? reasonValue.GetString() ?? "Controller event" : "Controller event";
+                AddObservedFinding(findings, message, "Kubernetes event", @namespace, reason, reason.Equals("ManagementFailed", StringComparison.OrdinalIgnoreCase));
+            }
+        }
+        catch (Exception exception) when (GetKubernetesStatusCode(exception) is 403 or 404) { }
+    }
+
+    private static bool AddObservedFinding(Dictionary<string, RbacFinding> findings, string message, string source, string? @namespace, string? eventReason = null, bool managementFailed = false)
+    {
+        if (string.IsNullOrWhiteSpace(message) && !managementFailed) return false;
         bool authorizationFailure = message.Contains("forbidden", StringComparison.OrdinalIgnoreCase) ||
             message.Contains("permission denied", StringComparison.OrdinalIgnoreCase) ||
             message.Contains("unauthorized", StringComparison.OrdinalIgnoreCase);
         bool cacheSyncIssue = message.Contains("cache sync", StringComparison.OrdinalIgnoreCase) ||
             message.Contains("informer sync", StringComparison.OrdinalIgnoreCase);
-        if (!authorizationFailure && !cacheSyncIssue) return;
+        if (!authorizationFailure && !cacheSyncIssue && !managementFailed) return false;
 
-        string state = authorizationFailure ? "observed failure" : "observed issue";
-        string check = authorizationFailure ? "Observed controller authorization failure" : "Controller cache sync issue";
+        string state = authorizationFailure || managementFailed ? "observed failure" : "observed issue";
+        string check = authorizationFailure ? "Observed controller authorization failure" : managementFailed ? "Instance management failed" : "Controller cache sync issue";
         string detail = cacheSyncIssue && !authorizationFailure
             ? $"{Limit(message)} This timeout can follow denied list/watch access, but the timeout alone does not prove an RBAC denial. Review the list/watch checks above."
-            : Limit(message);
+            : string.IsNullOrWhiteSpace(message) ? "KRO reports that it could not manage this instance. Review the denied controller permission checks and the instance events." : Limit(message);
         string key = $"{state}|{string.Concat(message.Where(static character => !char.IsWhiteSpace(character))).ToLowerInvariant()}";
         findings.TryAdd(key, new RbacFinding("controller", eventReason ?? check, state, "—", "—", "—", @namespace, detail, source));
+        return true;
     }
     private static string Limit(string value) => value.Length <= 500 ? value : value[..500] + "…";
 
@@ -419,13 +492,13 @@ internal sealed class RbacAdvisorService(KubernetesClientFactory clientFactory)
         roleRef = new { apiGroup = RbacGroup, kind = "ClusterRole", name = roleName }
     };
 
-    private static string CreatePlanToken(object clusterRole, object clusterRoleBinding)
+    private static string CreatePlanToken(object clusterRole, object clusterRoleBinding, string? roleResourceVersion)
     {
-        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(new { clusterRole, clusterRoleBinding });
+        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(new { clusterRole, clusterRoleBinding, roleResourceVersion });
         return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
     }
 
-    private static async Task<(bool Exists, bool Managed, bool Matches, bool Inspectable)> InspectExistingAsync(Kubernetes client, string resource, string name, IReadOnlyList<PermissionRequirement> requirements, CancellationToken token)
+    private static async Task<(bool Exists, bool Managed, bool Matches, bool Inspectable, bool CanUpdate, string? ResourceVersion)> InspectExistingAsync(Kubernetes client, string resource, string name, string definitionName, IReadOnlyList<PermissionRequirement> requirements, CancellationToken token)
     {
         try
         {
@@ -434,10 +507,13 @@ internal sealed class RbacAdvisorService(KubernetesClientFactory clientFactory)
             JsonElement root = doc.RootElement;
             bool managed = HasManagedLabel(root);
             bool matches = managed && RulesMatchPlanExactly(root, requirements);
-            return (true, managed, matches, true);
+            bool belongsToDefinition = root.TryGetProperty("metadata", out JsonElement metadata) && metadata.TryGetProperty("labels", out JsonElement labels) && labels.TryGetProperty("kro-studio.io/rgd", out JsonElement definitionLabel) && definitionLabel.GetString() == Sanitize(definitionName);
+            string? resourceVersion = root.TryGetProperty("metadata", out JsonElement resourceMetadata) && resourceMetadata.TryGetProperty("resourceVersion", out JsonElement resourceVersionValue) ? resourceVersionValue.GetString() : null;
+            bool canUpdate = managed && belongsToDefinition && !matches && resourceVersion is not null && RulesAreSubsetOfPlan(root, requirements);
+            return (true, managed, matches, true, canUpdate, resourceVersion);
         }
-        catch (Exception exception) when (GetKubernetesStatusCode(exception) == 404) { return (false, false, false, true); }
-        catch (Exception exception) when (GetKubernetesStatusCode(exception) == 403) { return (false, false, false, false); }
+        catch (Exception exception) when (GetKubernetesStatusCode(exception) == 404) { return (false, false, false, true, false, null); }
+        catch (Exception exception) when (GetKubernetesStatusCode(exception) == 403) { return (false, false, false, false, false, null); }
     }
 
     private static async Task<(bool Exists, bool Managed, bool Matches, bool Inspectable)> InspectBindingAsync(Kubernetes client, string name, CancellationToken token)
@@ -482,6 +558,24 @@ internal sealed class RbacAdvisorService(KubernetesClientFactory clientFactory)
         return actual.SetEquals(expected);
     }
 
+    private static bool RulesAreSubsetOfPlan(JsonElement role, IReadOnlyList<PermissionRequirement> requirements)
+    {
+        if (!role.TryGetProperty("rules", out JsonElement rules) || rules.ValueKind != JsonValueKind.Array) return false;
+        HashSet<string> expected = requirements.Select(static item => $"{item.ApiGroup}|{item.Resource}|{item.Verb}").ToHashSet(StringComparer.Ordinal);
+        foreach (JsonElement rule in rules.EnumerateArray())
+        {
+            if (rule.TryGetProperty("resourceNames", out _) || rule.TryGetProperty("nonResourceURLs", out _) ||
+                !rule.TryGetProperty("apiGroups", out JsonElement groups) || groups.ValueKind != JsonValueKind.Array ||
+                !rule.TryGetProperty("resources", out JsonElement resources) || resources.ValueKind != JsonValueKind.Array ||
+                !rule.TryGetProperty("verbs", out JsonElement verbs) || verbs.ValueKind != JsonValueKind.Array) return false;
+            foreach (JsonElement group in groups.EnumerateArray())
+            foreach (JsonElement resource in resources.EnumerateArray())
+            foreach (JsonElement verb in verbs.EnumerateArray())
+                if (!expected.Contains($"{group.GetString()}|{resource.GetString()}|{verb.GetString()}")) return false;
+        }
+        return true;
+    }
+
     private static bool Contains(JsonElement rule, string property, string value) => rule.TryGetProperty(property, out JsonElement values) && values.ValueKind == JsonValueKind.Array && values.EnumerateArray().Any(item => item.GetString() is "*" || item.GetString() == value);
     private static bool HasManagedLabel(JsonElement root) => root.TryGetProperty("metadata", out JsonElement meta) && meta.TryGetProperty("labels", out JsonElement labels) && labels.TryGetProperty(ManagedLabel, out JsonElement value) && value.GetString() == ManagedValue;
     private static string DisplayGroup(string value) => value.Length == 0 ? "core" : value;
@@ -502,6 +596,6 @@ internal sealed class RbacAdvisorService(KubernetesClientFactory clientFactory)
 internal sealed record PermissionRequirement(string Label, string Verb, string ApiGroup, string Resource, string? Namespace);
 internal sealed record RbacFinding(string Identity, string Check, string Status, string Verb, string ApiGroup, string Resource, string? Namespace, string Detail, string Source);
 internal sealed record RbacAdvisorReport(string StudioIdentity, string ControllerIdentity, DateTimeOffset CheckedAt, IReadOnlyList<RbacFinding> Studio, IReadOnlyList<RbacFinding> Controller, string Note);
-internal sealed record PlannedRbacObject(string Kind, string Name, object Manifest, bool Exists, bool ManagedByStudio, bool MatchesPlan, bool Inspectable);
+internal sealed record PlannedRbacObject(string Kind, string Name, object Manifest, bool Exists, bool ManagedByStudio, bool MatchesPlan, bool Inspectable, bool CanUpdate, string? ResourceVersion);
 internal sealed record RbacApplyPlan(string DefinitionName, string ControllerIdentity, bool ServiceAccountVerified, string PlanToken, IReadOnlyList<PermissionRequirement> Requirements, PlannedRbacObject ClusterRole, PlannedRbacObject ClusterRoleBinding, string Impact);
 internal sealed record RbacApplyResult(IReadOnlyList<string> Created, string Message);
