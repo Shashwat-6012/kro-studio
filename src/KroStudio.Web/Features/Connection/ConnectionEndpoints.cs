@@ -15,6 +15,8 @@ public static class ConnectionEndpoints
             .WithName("GetKroInstallationDetails");
         group.MapPost("/kro-installation", (KroInstallationService service, CancellationToken cancellationToken) => service.InstallAsync(cancellationToken))
             .WithName("InstallKro");
+        group.MapPost("/kro-controller/restart", (KroControllerService service, CancellationToken cancellationToken) => service.RestartAsync(cancellationToken))
+            .WithName("RestartKroController");
         return api;
     }
 }
