@@ -30,7 +30,8 @@ When a cluster is connected but KRO's `ResourceGraphDefinition` API is missing, 
 ## Backend API
 
 - `GET /api/v1/connection` and `/api/v1/capabilities` report cluster and KRO discovery state. `GET /api/v1/kro-installation` reports the configured install version; `POST /api/v1/kro-installation` installs the pinned official KRO raw release manifest when KRO is not already detected.
-- `/api/v1/rgds` supports list, read, YAML/JSON dry-run validation, create, update, and delete.
+- `POST /api/v1/kro-controller/restart` requests a rolling restart of the `kro-system/kro` controller deployment.
+- `/api/v1/rgds` supports list, read, YAML/JSON dry-run validation, create, update, delete, and `POST /api/v1/rgds/{name}/retry` to request another reconciliation.
 - `/api/v1/rgds/{name}/api` resolves a definition to its served generated API through Kubernetes discovery.
 - `/api/v1/rgds/{name}/instances` and `/api/v1/apis/{apiId}/instances` support paged list, read, create, update, and delete. Instance conditions/status are returned with the Kubernetes object; `/{instanceName}/events` reads related events.
 - `/{instanceName}/resources` inspects only resource kinds declared by the RGD and matches KRO's `kro.run/instance-id` ownership label. Secret objects are skipped; forbidden or undiscovered types are reported as partial results.
@@ -54,6 +55,7 @@ Open `http://127.0.0.1:8080/health` to check that the API is running. Run the UI
 - Cluster connectivity and Kubernetes version reporting.
 - KRO ResourceGraphDefinition API discovery and catalog/manifest reads.
 - RGD dry-run validation and cluster-scoped create, update, and delete.
+- Manual KRO controller restart and per-RGD reconciliation retry.
 - Generated API resolution by declared group/kind and Kubernetes API discovery, including scope and OpenAPI schema.
 - Dynamic custom resource list, read, create, update, delete, and related Kubernetes event retrieval.
 - Read-only composed-resource inspection using KRO ownership labels and RGD-declared API types.

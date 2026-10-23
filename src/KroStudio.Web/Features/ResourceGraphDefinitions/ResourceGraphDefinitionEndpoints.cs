@@ -21,6 +21,7 @@ public static class ResourceGraphDefinitionEndpoints
             return Results.Created($"/api/v1/rgds/{Uri.EscapeDataString(name)}", created);
         }).WithName("CreateResourceGraphDefinition");
         group.MapPut("/{name}", (string name, JsonElement input, ResourceGraphDefinitionService service, CancellationToken token) => service.UpdateAsync(name, ParseManifest(input), token)).WithName("UpdateResourceGraphDefinition");
+        group.MapPost("/{name}/retry", (string name, ResourceGraphDefinitionService service, CancellationToken token) => service.RetryReconciliationAsync(name, token)).WithName("RetryResourceGraphDefinitionReconciliation");
         group.MapDelete("/{name}", async (string name, ResourceGraphDefinitionService service, CancellationToken token) =>
         {
             await service.DeleteAsync(name, token).ConfigureAwait(false);

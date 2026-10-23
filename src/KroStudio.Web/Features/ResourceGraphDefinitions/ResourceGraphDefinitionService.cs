@@ -1,5 +1,6 @@
 using System.Text.Json;
 using k8s;
+using k8s.Models;
 using KroStudio.Web.Infrastructure.Kubernetes;
 
 namespace KroStudio.Web.Features.ResourceGraphDefinitions;
@@ -10,6 +11,7 @@ public sealed class ResourceGraphDefinitionService(KubernetesClientFactory clien
     private const string ApiGroup = "kro.run";
     private const string ApiVersion = "v1alpha1";
     private const string ResourcePlural = "resourcegraphdefinitions";
+    private const string RetryAnnotation = "kro-studio.io/retry-requested-at";
 
     /// <summary>Lists definitions available to the configured Kubernetes identity.</summary>
     public async Task<IReadOnlyList<ResourceGraphDefinitionSummary>> ListAsync(CancellationToken cancellationToken)
@@ -84,6 +86,30 @@ public sealed class ResourceGraphDefinitionService(KubernetesClientFactory clien
     {
         Kubernetes client = clientFactory.GetClient();
         await client.CustomObjects.DeleteClusterCustomObjectAsync(ApiGroup, ApiVersion, ResourcePlural, ValidateName(name), cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Requests another KRO reconciliation by updating a studio-owned metadata annotation.</summary>
+    public async Task<ResourceGraphDefinitionRetryResult> RetryReconciliationAsync(string name, CancellationToken cancellationToken)
+    {
+        Kubernetes client = clientFactory.GetClient();
+        string retryAt = DateTimeOffset.UtcNow.ToString("O");
+        string patch = JsonSerializer.Serialize(new
+        {
+            metadata = new
+            {
+                annotations = new Dictionary<string, string> { [RetryAnnotation] = retryAt }
+            }
+        });
+
+        await client.CustomObjects.PatchClusterCustomObjectAsync(
+            new V1Patch(patch, V1Patch.PatchType.MergePatch),
+            ApiGroup,
+            ApiVersion,
+            ResourcePlural,
+            ValidateName(name),
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        return new ResourceGraphDefinitionRetryResult(name, retryAt, $"A new reconciliation was requested for {name}.");
     }
 
     /// <summary>Converts an RGD manifest into a concise catalog summary.</summary>
@@ -161,6 +187,9 @@ public sealed class ResourceGraphDefinitionService(KubernetesClientFactory clien
         return status.TryGetProperty("state", out JsonElement state) && state.GetString() == "Inactive" ? "Failed" : "Processing";
     }
 }
+
+/// <summary>Reports a manual RGD reconciliation retry request.</summary>
+public sealed record ResourceGraphDefinitionRetryResult(string Name, string RequestedAt, string Message);
 
 /// <summary>Summarizes an RGD for the catalog.</summary>
 /// <param name="Name">The cluster-scoped RGD name.</param>

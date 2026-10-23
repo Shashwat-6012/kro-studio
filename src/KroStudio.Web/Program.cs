@@ -18,6 +18,7 @@ builder.Services.AddCors(options => options.AddPolicy("Ui", policy =>
 builder.Services.AddSingleton<KubernetesClientFactory>();
 builder.Services.AddSingleton<ClusterConnectionService>();
 builder.Services.AddSingleton<KroInstallationService>();
+builder.Services.AddSingleton<KroControllerService>();
 builder.Services.AddSingleton<ResourceGraphDefinitionService>();
 builder.Services.AddSingleton<GeneratedApiResolver>();
 builder.Services.AddSingleton<InstanceService>();
