@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, AlertTriangle, ArrowLeft, ArrowRight, Box, ChevronDown, CircleHelp, Clipboard, Database, ExternalLink, FileCode2, GitBranch, LayoutDashboard, Layers3, Plus, RefreshCw, Search, ShieldCheck, X, Trash2, Pencil } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Activity, AlertTriangle, ArrowLeft, ArrowRight, Box, ChevronDown, CircleHelp, Clipboard, Database, ExternalLink, FileCode2, GitBranch, LayoutDashboard, Layers3, Plus, RefreshCw, Search, ShieldCheck, X, Trash2, Pencil, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 
 type Definition = { name: string; kind: string; apiVersion: string; generatedKind: string | null; readiness: string; createdAt: string | null };
 type Connection = { connected: boolean; context: string | null; kubernetesVersion: string | null; message: string };
@@ -83,6 +83,8 @@ export default function App() {
   const [pageIndex, setPageIndex] = useState(0);
   const [namespace, setNamespace] = useState('default');
   const [instanceData, setInstanceData] = useState<{ resources: Manifest[]; events: Manifest[]; warnings: string[] }>({ resources: [], events: [], warnings: [] });
+  const [resourceLogs, setResourceLogs] = useState<{ podName: string; container: string; text: string }[]>([]);
+  const [logsResource, setLogsResource] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('All statuses');
   const [filterOpen, setFilterOpen] = useState(false);
@@ -224,15 +226,26 @@ export default function App() {
   }
   async function openInstance(item: Manifest) {
     if (!selected) return;
-    setSelectedInstance(item); setInstanceTab('Overview'); setInstanceData({ resources: [], events: [], warnings: [] }); setError('');
+    setSelectedInstance(item); setInstanceTab('Overview'); setInstanceData({ resources: [], events: [], warnings: [] }); setResourceLogs([]); setLogsResource(null); setError('');
     const name = objectName(item); const query = namespaceQueryFor(selected.name, namespace, apis, definitions);
     try {
       const [resources, events] = await Promise.allSettled([
-        request<{ resources: { resourceId: string; object: Manifest }[]; warnings: string[] }>(`/api/v1/rgds/${enc(selected.name)}/instances/${enc(name)}/resources${query}`),
+        request<{ resources: { resourceId: string; object: Manifest; parentResourceName?: string | null }[]; warnings: string[] }>(`/api/v1/rgds/${enc(selected.name)}/instances/${enc(name)}/resources${query}`),
         request<{ items: Manifest[] }>(`/api/v1/rgds/${enc(selected.name)}/instances/${enc(name)}/events${nsQuery(namespace)}`),
       ]);
-      setInstanceData({ resources: resources.status === 'fulfilled' ? (resources.value.resources ?? []).map((entry) => ({ resourceId: entry.resourceId, ...entry.object })) : [], warnings: resources.status === 'fulfilled' ? resources.value.warnings ?? [] : [messageOf(resources.reason)], events: events.status === 'fulfilled' ? events.value.items ?? [] : [] });
+      setInstanceData({ resources: resources.status === 'fulfilled' ? (resources.value.resources ?? []).map((entry) => ({ resourceId: entry.resourceId, parentResourceName: entry.parentResourceName, ...entry.object })) : [], warnings: resources.status === 'fulfilled' ? resources.value.warnings ?? [] : [messageOf(resources.reason)], events: events.status === 'fulfilled' ? events.value.items ?? [] : [] });
     } catch (e) { setError(messageOf(e)); }
+  }
+  async function loadResourceLogs(resource: Manifest) {
+    if (!selected || !selectedInstance) return;
+    const resourceName = objectName(resource);
+    setLogsResource(resourceName); setResourceLogs([]); setBusy(true); setError('');
+    try {
+      const query = namespaceQueryFor(selected.name, namespace, apis, definitions);
+      const logs = await request<{ podName: string; container: string; text: string }[]>(`/api/v1/rgds/${enc(selected.name)}/instances/${enc(objectName(selectedInstance))}/resources/${enc(resourceName)}/logs${query}`);
+      setResourceLogs(logs ?? []);
+    } catch (e) { setError(messageOf(e)); }
+    finally { setBusy(false); }
   }
   async function selectApi(api: GeneratedApi) {
     setSelectedApi(api); setSelected(null); setSelectedInstance(null); setActiveNav('API catalog'); setError('');
@@ -258,7 +271,7 @@ export default function App() {
       <header className="topbar"><div className="breadcrumbs"><span>Workspace</span><span className="crumb-slash">/</span><b>{selectedInstance ? objectName(selectedInstance) : selectedApi?.kind ?? selected?.name ?? activeNav}</b></div><div className="top-actions"><div className="connection-indicator"><span className={`status-dot ${connection?.connected ? 'green' : 'amber'}`}/>{connection?.connected ? 'Cluster connected' : 'Cluster disconnected'}</div>{connection?.connected && capabilities?.kroApiAvailable && <button className="secondary-btn" onClick={() => setShowKroRestartDialog(true)} disabled={restartingKro}>Restart controller</button>}<button className="icon-btn" aria-label="Refresh data" onClick={() => void refresh()}><RefreshCw size={16}/></button><div className="avatar top-avatar">KS</div></div></header>
       <div className="content-wrap">
         {connection?.connected && capabilities?.clusterApiAvailable && !capabilities.kroApiAvailable && <section className="kro-install-banner"><div className="kro-install-icon"><Layers3 size={17}/></div><div className="kro-install-copy"><b>KRO isn’t installed in this cluster</b><p>Install KRO {kroInstallation ? `v${kroInstallation.version}` : ''} to create and manage resource graphs.</p></div><a className="kro-doc-link" href={kroInstallation?.documentationUrl ?? 'https://kro.run/docs/getting-started/Installation/'} target="_blank" rel="noreferrer">Install details <ExternalLink size={13}/></a><button className="primary-btn" onClick={() => setShowKroInstallDialog(true)} disabled={installingKro}>Install KRO <ArrowRight size={15}/></button></section>}
-        {selectedInstance && selected ? <InstanceDetail item={selectedInstance} definition={selected} data={instanceData} tab={instanceTab} setTab={setInstanceTab} back={() => setSelectedInstance(null)} edit={() => startInstance('edit-instance', selectedInstance)} remove={() => void removeInstance(selectedInstance)} namespace={namespace}/> : activeNav === 'Instances' ? <InstancesPage definitions={definitions} selected={selected} instances={filteredInstances} loading={loading || busy} namespace={namespace} setNamespace={(value) => { setNamespace(value); setPageIndex(0); setPageTokens([null]); }} search={instanceSearch} setSearch={setInstanceSearch} pageIndex={pageIndex} hasNext={Boolean(continueToken)} previous={() => { const next = Math.max(0, pageIndex - 1); setPageIndex(next); if (selected) void loadInstances(selected.name, pageTokens[next]); }} next={() => { if (!selected || !continueToken) return; const tokens = [...pageTokens.slice(0, pageIndex + 1), continueToken]; setPageTokens(tokens); setPageIndex(pageIndex + 1); void loadInstances(selected.name, continueToken); }} choose={(name) => { const item = definitions.find((entry) => entry.name === name); if (item) { setSelected(item); setSelectedInstance(null); setPageIndex(0); setPageTokens([null]); } }} create={() => startInstance('create-instance')} open={openInstance} remove={(item) => void removeInstance(item)} /> : selectedApi ? <ApiDetail api={selectedApi} definition={definitions.find((item) => item.name === selectedApi.definitionName) ?? definitions.find((item) => item.generatedKind === selectedApi.kind)} manifest={manifest} back={() => { setSelectedApi(null); setActiveNav('API catalog'); }} /> : selected ? <DefinitionDetail definition={selected} manifest={manifest} active={activeNav} tab={tab} setTab={setTab} back={() => { setSelected(null); setManifest(null); setActiveNav('Resource graphs'); }} edit={() => startRgd('edit-rgd')} createInstance={() => startInstance('create-instance')} remove={() => void removeRgd()} retry={() => void retryRgd()} busy={busy} openInstances={() => { setActiveNav('Instances'); setSelectedInstance(null); }} /> : activeNav === 'RBAC advisor' ? <RbacAdvisorPage definitions={definitions} namespace={namespace}/> : activeNav === 'API catalog' ? <ApiCatalog apis={filteredApis} search={apiSearch} setSearch={setApiSearch} loading={loading} onSelect={(api) => void selectApi(api)}/> : activeNav === 'Resource graphs' ? <ResourceGraphCatalog definitions={definitions} loading={loading} query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} filterOpen={filterOpen} setFilterOpen={setFilterOpen} create={() => startRgd('create-rgd')} open={openDefinition}/> : <Dashboard definitions={definitions} apis={apis} capabilities={capabilities} loading={loading} onNavigate={navigate} onCreate={() => startRgd('create-rgd')} onOpen={openDefinition}/ >}
+        {selectedInstance && selected ? <InstanceDetail item={selectedInstance} definition={selected} data={instanceData} tab={instanceTab} setTab={setInstanceTab} back={() => setSelectedInstance(null)} edit={() => startInstance('edit-instance', selectedInstance)} remove={() => void removeInstance(selectedInstance)} namespace={namespace} logs={resourceLogs} logsResource={logsResource} loadLogs={loadResourceLogs} logsLoading={busy}/> : activeNav === 'Instances' ? <InstancesPage definitions={definitions} selected={selected} instances={filteredInstances} loading={loading || busy} namespace={namespace} setNamespace={(value) => { setNamespace(value); setPageIndex(0); setPageTokens([null]); }} search={instanceSearch} setSearch={setInstanceSearch} pageIndex={pageIndex} hasNext={Boolean(continueToken)} previous={() => { const next = Math.max(0, pageIndex - 1); setPageIndex(next); if (selected) void loadInstances(selected.name, pageTokens[next]); }} next={() => { if (!selected || !continueToken) return; const tokens = [...pageTokens.slice(0, pageIndex + 1), continueToken]; setPageTokens(tokens); setPageIndex(pageIndex + 1); void loadInstances(selected.name, continueToken); }} choose={(name) => { const item = definitions.find((entry) => entry.name === name); if (item) { setSelected(item); setSelectedInstance(null); setPageIndex(0); setPageTokens([null]); } }} create={() => startInstance('create-instance')} open={openInstance} remove={(item) => void removeInstance(item)} /> : selectedApi ? <ApiDetail api={selectedApi} definition={definitions.find((item) => item.name === selectedApi.definitionName) ?? definitions.find((item) => item.generatedKind === selectedApi.kind)} manifest={manifest} back={() => { setSelectedApi(null); setActiveNav('API catalog'); }} /> : selected ? <DefinitionDetail definition={selected} manifest={manifest} active={activeNav} tab={tab} setTab={setTab} back={() => { setSelected(null); setManifest(null); setActiveNav('Resource graphs'); }} edit={() => startRgd('edit-rgd')} createInstance={() => startInstance('create-instance')} remove={() => void removeRgd()} retry={() => void retryRgd()} busy={busy} openInstances={() => { setActiveNav('Instances'); setSelectedInstance(null); }} /> : activeNav === 'RBAC advisor' ? <RbacAdvisorPage definitions={definitions} namespace={namespace}/> : activeNav === 'API catalog' ? <ApiCatalog apis={filteredApis} search={apiSearch} setSearch={setApiSearch} loading={loading} onSelect={(api) => void selectApi(api)}/> : activeNav === 'Resource graphs' ? <ResourceGraphCatalog definitions={definitions} loading={loading} query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} filterOpen={filterOpen} setFilterOpen={setFilterOpen} create={() => startRgd('create-rgd')} open={openDefinition}/> : <Dashboard definitions={definitions} apis={apis} capabilities={capabilities} loading={loading} onNavigate={navigate} onCreate={() => startRgd('create-rgd')} onOpen={openDefinition}/ >}
       </div>
       <footer className="page-footer"><span>KRO STUDIO <span className="footer-sep">·</span> v0.1.0</span><span className="footer-links"><span><span className={`status-dot ${connection?.connected ? 'green' : 'amber'}`}/>{connection?.connected ? 'Connected' : 'Waiting for cluster'}</span><a href="https://kro.run/docs/" target="_blank" rel="noreferrer">Documentation <ExternalLink size={12}/></a><span className="footer-credits">Made for platform engineers <span>✳</span></span></span></footer>
     </main>
@@ -384,11 +397,77 @@ function ApiCatalog({ apis, search, setSearch, loading, onSelect }: { apis: Gene
 
 function ApiDetail({ api, definition, manifest, back }: { api: GeneratedApi; definition?: Definition; manifest: Manifest | null; back: () => void }) { return <><div className="detail-back"><button onClick={back}><ArrowLeft size={15}/> API catalog</button><span>/</span>{api.kind}</div><div className="detail-heading"><div><div className="eyebrow"><span className="eyebrow-line"/>GENERATED CUSTOM API</div><h1>{api.kind}</h1><p className="page-subtitle">{api.group}/{api.version} · {api.plural}</p></div></div><div className="detail-stats"><div><span>RESOURCE</span><b>{api.plural}</b></div><div><span>SCOPE</span><b>{api.namespaced ? 'Namespaced' : 'Cluster'}</b></div><div><span>DEFINITION</span><b>{definition?.name ?? '—'}</b></div><div><span>API VERSION</span><b>{api.version}</b></div></div><div className="detail-columns"><JsonPanel title="OpenAPI schema" value={api.schema} empty="Kubernetes did not return an OpenAPI schema for this API."/><JsonPanel title="Resource graph schema" value={manifest?.spec?.schema} empty="The resource graph definition is unavailable."/></div></>; }
 
-function InstanceDetail({ item, definition, data, tab, setTab, back, edit, remove, namespace }: { item: Manifest; definition: Definition; data: { resources: Manifest[]; events: Manifest[]; warnings: string[] }; tab: InstanceTab; setTab: (value: InstanceTab) => void; back: () => void; edit: () => void; remove: () => void; namespace: string }) {
+function InstanceDetail({ item, definition, data, tab, setTab, back, edit, remove, namespace, logs, logsResource, loadLogs, logsLoading }: { item: Manifest; definition: Definition; data: { resources: Manifest[]; events: Manifest[]; warnings: string[] }; tab: InstanceTab; setTab: (value: InstanceTab) => void; back: () => void; edit: () => void; remove: () => void; namespace: string; logs: { podName: string; container: string; text: string }[]; logsResource: string | null; loadLogs: (resource: Manifest) => void; logsLoading: boolean }) {
+  const [selectedResource, setSelectedResource] = useState<Manifest | null>(null);
+  const [inspectTab, setInspectTab] = useState<'Manifest' | 'Logs'>('Manifest');
+  const [viewport, setViewport] = useState({ x: 0, y: 0, scale: 1 });
+  const dragState = useRef<{ x: number; y: number; originX: number; originY: number } | null>(null);
+  const graphCanvas = useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = useState<{ key: string; d: string }[]>([]);
+  useEffect(() => { setSelectedResource(data.resources[0] ?? null); setInspectTab('Manifest'); }, [data.resources]);
+  useEffect(() => setViewport({ x: 0, y: 0, scale: 1 }), [item]);
+  useEffect(() => {
+    const canvas = graphCanvas.current;
+    if (!canvas) return;
+    const measure = () => {
+      const root = canvas.querySelector<HTMLElement>('[data-graph-node="root"]');
+      const viewportRect = canvas.getBoundingClientRect();
+      if (!root) return;
+      const point = (element: HTMLElement) => {
+        const rect = element.getBoundingClientRect();
+        return { x: (rect.left + rect.width / 2 - viewportRect.left) / viewport.scale, y: (rect.top + rect.height / 2 - viewportRect.top) / viewport.scale };
+      };
+      const rootPoint = point(root);
+      const byUid = new Map(data.resources.map((resource, index) => [resource.metadata?.uid, index]).filter(([uid]) => Boolean(uid)) as [string, number][]);
+      setEdges(data.resources.map((resource, index) => {
+        const node = canvas.querySelector<HTMLElement>(`[data-graph-node="resource-${index}"]`);
+        if (!node) return null;
+        const nodePoint = point(node);
+        const explicitParentIndex = resource.parentResourceName ? data.resources.findIndex((candidate) => objectName(candidate) === resource.parentResourceName) : -1;
+        const owner = resource.metadata?.ownerReferences?.find((reference: Manifest) => byUid.has(reference.uid));
+        const parentIndex = explicitParentIndex >= 0 ? explicitParentIndex : owner ? byUid.get(owner.uid) : undefined;
+        const parent = parentIndex === undefined ? rootPoint : (() => {
+          const element = canvas.querySelector<HTMLElement>(`[data-graph-node="resource-${parentIndex}"]`);
+          return element ? point(element) : rootPoint;
+        })();
+        const midY = parent.y + (nodePoint.y - parent.y) * 0.52;
+        return { key: String(index), d: `M ${parent.x} ${parent.y} C ${parent.x} ${midY}, ${nodePoint.x} ${midY}, ${nodePoint.x} ${nodePoint.y}` };
+      }).filter((edge): edge is { key: string; d: string } => edge !== null));
+    };
+    const frame = requestAnimationFrame(measure);
+    const observer = new ResizeObserver(measure);
+    observer.observe(canvas);
+    window.addEventListener('resize', measure);
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); window.removeEventListener('resize', measure); };
+  }, [data.resources, viewport.scale, viewport.x, viewport.y, tab]);
+  const canShowLogs = (resource: Manifest | null) => Boolean(resource && ['Pod', 'Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Job'].includes(resource.kind));
+  const zoom = (factor: number) => setViewport((value) => ({ ...value, scale: Math.min(1.6, Math.max(.6, value.scale * factor)) }));
+  const resetGraph = () => {
+    const view = document.querySelector<HTMLElement>('.graph-viewport');
+    const canvas = graphCanvas.current;
+    if (!view || !canvas) { setViewport({ x: 0, y: 0, scale: 1 }); return; }
+    const scale = Math.min(1, (view.clientWidth - 24) / canvas.offsetWidth, (view.clientHeight - 24) / canvas.offsetHeight);
+    setViewport({ x: (view.clientWidth - canvas.offsetWidth * scale) / 2, y: (view.clientHeight - canvas.offsetHeight * scale) / 2, scale });
+  };
+  const startGraphDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest('button')) return;
+    dragState.current = { x: event.clientX, y: event.clientY, originX: viewport.x, originY: viewport.y };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const moveGraphDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragState.current) return;
+    setViewport((value) => ({ ...value, x: dragState.current!.originX + event.clientX - dragState.current!.x, y: dragState.current!.originY + event.clientY - dragState.current!.y }));
+  };
+  const stopGraphDrag = () => { dragState.current = null; };
+  const onGraphWheel = (event: React.WheelEvent<HTMLDivElement>) => { event.preventDefault(); zoom(event.deltaY < 0 ? 1.08 : .92); };
+  const selectedName = selectedResource ? objectName(selectedResource) : '';
+  const selectedKind = selectedResource?.kind ?? '';
   const tabs: InstanceTab[] = ['Overview', 'Resources', 'Events', 'YAML'];
   return <><div className="detail-back"><button onClick={back}><ArrowLeft size={15}/> Instances</button><span>/</span>{objectName(item)}</div><div className="detail-heading"><div><div className="eyebrow"><span className="eyebrow-line"/>GENERATED INSTANCE · {definition.generatedKind}</div><h1>{objectName(item)}</h1><p className="page-subtitle">{objectNamespace(item)} <span className="detail-dot">·</span> {item.apiVersion}</p></div><div className="detail-actions"><button className="secondary-btn" onClick={edit}><Pencil size={15}/> Edit YAML</button><button className="secondary-btn danger-btn" onClick={remove}><Trash2 size={15}/> Delete</button></div></div><div className="detail-tabs">{tabs.map((name) => <button className={`detail-tab ${tab === name ? 'active' : ''}`} key={name} onClick={() => setTab(name)}>{name}{name === 'Resources' && <span className="tab-count">{data.resources.length}</span>}{name === 'Events' && <span className="tab-count">{data.events.length}</span>}</button>)}</div>
     {tab === 'Overview' && <><div className="detail-stats"><div><span>STATUS</span><ReadinessBadge status={readinessOf(item)}/></div><div><span>NAMESPACE</span><b>{objectNamespace(item)}</b></div><div><span>CREATED</span><b>{formatDate(item.metadata?.creationTimestamp)}</b></div><div><span>RESOURCE GRAPH</span><b>{definition.name}</b></div></div><div className="overview-card"><h2>Instance status</h2>{item.status?.conditions?.length ? <div className="condition-list">{item.status.conditions.map((condition: Manifest, index: number) => <div className="condition-row" key={index}><span>{condition.type}</span><span>{condition.status}</span><span>{condition.reason ?? condition.message ?? '—'}</span></div>)}</div> : <div className="inline-empty"><Activity size={16}/> No status conditions reported.</div>}</div></>}
-    {tab === 'Resources' && <section className="overview-card"><h2>Composed resources</h2><p>Live children associated with this instance.</p>{data.warnings.map((warning) => <div className="warning-row" key={warning}>{warning}</div>)}{data.resources.length ? <pre className="json-pre">{pretty(data.resources)}</pre> : <Empty icon={<Box size={20}/>} title="No composed resources returned" detail={data.warnings[0] ?? 'KRO has not reported child resources for this instance.'}/>}</section>}
+    {tab === 'Resources' && <section className="resource-explorer"><div className="overview-card resource-graph-card"><div className="resource-graph-heading"><div><h2>Resource graph</h2><p>Live objects composed for this instance. Select a node to inspect it; drag the canvas or use the controls to navigate.</p></div><div className="graph-toolbar"><span className="total-pill">{data.resources.length} resources</span><button aria-label="Zoom out" onClick={() => zoom(.85)}><ZoomOut size={14}/></button><button aria-label="Zoom in" onClick={() => zoom(1.18)}><ZoomIn size={14}/></button><button aria-label="Fit graph" onClick={resetGraph}><Maximize2 size={14}/></button></div></div>{data.warnings.map((warning) => <div className="warning-row" key={warning}>{warning}</div>)}{data.resources.length ? <div className="graph-viewport" onPointerDown={startGraphDrag} onPointerMove={moveGraphDrag} onPointerUp={stopGraphDrag} onPointerCancel={stopGraphDrag} onWheel={onGraphWheel}><div className="graph-canvas" ref={graphCanvas} style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})` }}><svg className="graph-edges" aria-hidden="true">{edges.map((edge) => <path key={edge.key} d={edge.d}/>)}</svg><div className="graph-root" data-graph-node="root"><span className="graph-node-icon"><GitBranch size={16}/></span><span><b>{objectName(item)}</b><small>{definition.generatedKind} · instance</small></span><ReadinessBadge status={readinessOf(item)}/></div><div className="graph-resource-grid">{data.resources.map((resource, index) => <button data-graph-node={`resource-${index}`} className={`graph-resource-node ${selectedName === objectName(resource) ? 'selected' : ''}`} key={`${resource.resourceId ?? 'resource'}-${objectName(resource)}-${index}`} onClick={() => { setSelectedResource(resource); setInspectTab('Manifest'); }}><span className="resource-icon"><Box size={16}/></span><span className="graph-node-copy"><b>{objectName(resource)}</b><small>{resource.resourceId ?? 'composed resource'} · {resource.kind ?? 'Resource'}</small></span><ReadinessBadge status={readinessOf(resource)}/></button>)}</div></div><div className="graph-zoom-label">{Math.round(viewport.scale * 100)}%</div></div> : <Empty icon={<Box size={20}/>} title="No composed resources returned" detail={data.warnings[0] ?? 'KRO has not reported child resources for this instance.'}/>}</div>
+      {selectedResource && <aside className="resource-inspector"><div className="inspector-heading"><span className="resource-icon"><Box size={16}/></span><div><b>{selectedName}</b><small>{selectedResource.resourceId ?? 'composed resource'} · {selectedKind}</small></div></div><div className="inspector-tabs"><button className={inspectTab === 'Manifest' ? 'active' : ''} onClick={() => setInspectTab('Manifest')}><FileCode2 size={13}/> YAML</button>{canShowLogs(selectedResource) && <button className={inspectTab === 'Logs' ? 'active' : ''} onClick={() => { setInspectTab('Logs'); if (logsResource !== selectedName) loadLogs(selectedResource); }}><Activity size={13}/> Logs</button>}</div>{inspectTab === 'Logs' && !canShowLogs(selectedResource) ? <pre className="resource-manifest">{pretty(selectedResource)}</pre> : inspectTab === 'Manifest' ? <pre className="resource-manifest">{pretty(selectedResource)}</pre> : <div className="resource-log-view">{logsLoading && logsResource === selectedName ? <div className="inline-empty">Loading recent logs…</div> : logsResource !== selectedName ? <div className="inline-empty">Loading recent logs…</div> : logs.length ? logs.map((entry) => <section className="log-container" key={`${entry.podName}-${entry.container}`}><div><b>{entry.podName}</b><small>{entry.container}</small></div><pre>{entry.text || 'No recent output.'}</pre></section>) : <div className="inline-empty">No pod logs are available for this resource. Logs appear for Pods and supported workloads with matching Pods.</div>}</div>}</aside>}
+    </section>}
     {tab === 'Events' && <section className="overview-card"><h2>Kubernetes events</h2><p>Events associated with this instance in {namespace}.</p>{data.events.length ? <div className="event-list">{data.events.map((event, index) => <div className="event-row" key={event.metadata?.uid ?? index}><ReadinessBadge status={event.type === 'Warning' ? 'Warning' : 'Normal'}/><div><b>{event.reason ?? 'Event'}</b><p>{event.message ?? 'No event message'}</p><small>{event.source?.component ?? 'Kubernetes'} · {formatDate(event.lastTimestamp ?? event.eventTime)}</small></div></div>)}</div> : <Empty icon={<Activity size={20}/>} title="No related events" detail="No Kubernetes events were returned for this instance."/>}</section>}
     {tab === 'YAML' && <JsonPanel title="Instance manifest" value={item} empty="Instance manifest is unavailable."/>}
   </>;

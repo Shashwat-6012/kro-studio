@@ -59,6 +59,11 @@ public static class InstanceEndpoints
             string apiId = (await apiResolver.ResolveForDefinitionAsync(name, token).ConfigureAwait(false)).Id;
             return await service.GetComposedResourcesAsync(apiId, instanceName, namespaceName, token).ConfigureAwait(false);
         }).WithName("GetResourceGraphDefinitionInstanceResources");
+        definitionGroup.MapGet("/{instanceName}/resources/{resourceName}/logs", async (string name, string instanceName, string resourceName, [FromQuery(Name = "namespace")] string? namespaceName, GeneratedApiResolver apiResolver, InstanceService service, CancellationToken token) =>
+        {
+            string apiId = (await apiResolver.ResolveForDefinitionAsync(name, token).ConfigureAwait(false)).Id;
+            return await service.GetResourceLogsAsync(apiId, instanceName, resourceName, namespaceName, token).ConfigureAwait(false);
+        }).WithName("GetResourceGraphDefinitionInstanceResourceLogs");
         definitionGroup.MapPut("/{instanceName}", async (string name, string instanceName, [FromQuery(Name = "namespace")] string? namespaceName, JsonElement input, GeneratedApiResolver apiResolver, InstanceService service, CancellationToken token) =>
         {
             string apiId = (await apiResolver.ResolveForDefinitionAsync(name, token).ConfigureAwait(false)).Id;

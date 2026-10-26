@@ -77,6 +77,7 @@ public sealed class InstanceService(KubernetesClientFactory clientFactory, Gener
         List<ComposedResourceSummary> resources = [];
         List<string> warnings = [];
         HashSet<string> visitedResources = new(StringComparer.Ordinal);
+        HashSet<string> visitedPods = new(StringComparer.Ordinal);
         foreach (JsonElement declared in declaredResources.EnumerateArray())
         {
             if (declared.TryGetProperty("externalRef", out _))
@@ -144,7 +145,39 @@ public sealed class InstanceService(KubernetesClientFactory clientFactory, Gener
                 using JsonDocument childDocument = JsonDocument.Parse(KubernetesJson.Serialize(rawChildren));
                 foreach (JsonElement child in childDocument.RootElement.GetProperty("items").EnumerateArray())
                 {
-                    resources.Add(new ComposedResourceSummary(resourceId, child.Clone()));
+                    JsonElement childObject = child.Clone();
+                    resources.Add(new ComposedResourceSummary(resourceId, childObject));
+                    if (namespaced && resourceKind is "Deployment" or "StatefulSet" or "DaemonSet" or "ReplicaSet" or "Job" &&
+                        child.TryGetProperty("metadata", out JsonElement childMetadata) && childMetadata.TryGetProperty("name", out JsonElement childNameValue) &&
+                        child.TryGetProperty("spec", out JsonElement childSpec) && childSpec.TryGetProperty("selector", out JsonElement selector) &&
+                        selector.TryGetProperty("matchLabels", out JsonElement matchLabels) && matchLabels.ValueKind == JsonValueKind.Object)
+                    {
+                        string selectorText = string.Join(',', matchLabels.EnumerateObject().Select(label => $"{label.Name}={label.Value.GetString()}"));
+                        if (selectorText.Length > 0)
+                        {
+                            try
+                            {
+                                var pods = await client.CoreV1.ListNamespacedPodAsync(childNamespace!, labelSelector: selectorText, limit: 50, cancellationToken: cancellationToken).ConfigureAwait(false);
+                                foreach (var pod in pods.Items)
+                                {
+                                    string podKey = $"{childNamespace}/{pod.Metadata.Name}";
+                                    if (visitedPods.Add(podKey))
+                                    {
+                                        resources.Add(new ComposedResourceSummary(resourceId, ToJson(pod), childNameValue.GetString()));
+                                    }
+                                }
+                                JsonElement podList = ToJson(pods);
+                                if (podList.TryGetProperty("metadata", out JsonElement podListMetadata) && podListMetadata.TryGetProperty("continue", out JsonElement podContinue) && !string.IsNullOrWhiteSpace(podContinue.GetString()))
+                                {
+                                    warnings.Add($"Pod results for composed workload '{childNameValue.GetString()}' exceed one page; only the first 50 Pods are shown.");
+                                }
+                            }
+                            catch (k8s.KubernetesException exception) when (exception.Status?.Code == 403)
+                            {
+                                warnings.Add($"Permission denied while listing Pods for composed workload '{childNameValue.GetString()}'.");
+                            }
+                        }
+                    }
                 }
                 if (childDocument.RootElement.TryGetProperty("metadata", out JsonElement listMetadata) && listMetadata.TryGetProperty("continue", out JsonElement continueValue) && !string.IsNullOrWhiteSpace(continueValue.GetString()))
                 {
@@ -161,6 +194,70 @@ public sealed class InstanceService(KubernetesClientFactory clientFactory, Gener
             }
         }
         return new ComposedResourcesInspection(resources, warnings, warnings.Count == 0);
+    }
+
+    /// <summary>Reads recent logs from a composed Pod or the Pods selected by a composed workload.</summary>
+    public async Task<IReadOnlyList<ResourceLogEntry>> GetResourceLogsAsync(string apiId, string instanceName, string resourceName, string? namespaceName, CancellationToken cancellationToken)
+    {
+        JsonElement instance = await GetAsync(apiId, instanceName, namespaceName, cancellationToken).ConfigureAwait(false);
+        string? instanceNamespace = instance.TryGetProperty("metadata", out JsonElement instanceMetadata) && instanceMetadata.TryGetProperty("namespace", out JsonElement instanceNamespaceValue)
+            ? instanceNamespaceValue.GetString()
+            : namespaceName;
+        ComposedResourcesInspection inspection = await GetComposedResourcesAsync(apiId, instanceName, namespaceName, cancellationToken).ConfigureAwait(false);
+        JsonElement resource = inspection.Resources.Select(entry => entry.Object)
+            .FirstOrDefault(item => item.TryGetProperty("metadata", out JsonElement metadata) && metadata.TryGetProperty("name", out JsonElement nameValue) && nameValue.GetString() == resourceName);
+        if (resource.ValueKind != JsonValueKind.Object)
+        {
+            throw new KeyNotFoundException($"Composed resource '{resourceName}' was not found for this instance.");
+        }
+
+        string kind = resource.TryGetProperty("kind", out JsonElement kindValue) ? kindValue.GetString() ?? string.Empty : string.Empty;
+        string? resourceNamespace = resource.TryGetProperty("metadata", out JsonElement metadataValue) && metadataValue.TryGetProperty("namespace", out JsonElement resourceNamespaceValue)
+            ? resourceNamespaceValue.GetString()
+            : instanceNamespace;
+        if (string.IsNullOrWhiteSpace(resourceNamespace))
+        {
+            return [];
+        }
+
+        List<string> podNames = [];
+        if (kind == "Pod")
+        {
+            if (resource.TryGetProperty("metadata", out JsonElement podMetadata) && podMetadata.TryGetProperty("name", out JsonElement podName))
+            {
+                podNames.Add(podName.GetString() ?? string.Empty);
+            }
+        }
+        else if (kind is "Deployment" or "StatefulSet" or "DaemonSet" or "ReplicaSet" or "Job" &&
+                 resource.TryGetProperty("spec", out JsonElement resourceSpec) && resourceSpec.TryGetProperty("selector", out JsonElement selector) &&
+                 selector.TryGetProperty("matchLabels", out JsonElement matchLabels) && matchLabels.ValueKind == JsonValueKind.Object)
+        {
+            string selectorText = string.Join(',', matchLabels.EnumerateObject().Select(label => $"{label.Name}={label.Value.GetString()}"));
+            if (selectorText.Length > 0)
+            {
+                Kubernetes client = clientFactory.GetClient();
+                var pods = await client.CoreV1.ListNamespacedPodAsync(resourceNamespace, labelSelector: selectorText, limit: 50, cancellationToken: cancellationToken).ConfigureAwait(false);
+                podNames.AddRange(pods.Items.Select(pod => pod.Metadata.Name));
+            }
+        }
+
+        if (podNames.Count == 0)
+        {
+            return [];
+        }
+        Kubernetes kubernetes = clientFactory.GetClient();
+        List<ResourceLogEntry> logs = [];
+        foreach (string podName in podNames.Where(name => !string.IsNullOrWhiteSpace(name)))
+        {
+            var pod = await kubernetes.CoreV1.ReadNamespacedPodAsync(podName, resourceNamespace, cancellationToken: cancellationToken).ConfigureAwait(false);
+            foreach (var container in pod.Spec.Containers)
+            {
+                await using Stream output = await kubernetes.CoreV1.ReadNamespacedPodLogAsync(podName, resourceNamespace, container: container.Name, tailLines: 200, cancellationToken: cancellationToken).ConfigureAwait(false);
+                using StreamReader reader = new(output);
+                logs.Add(new ResourceLogEntry(podName, container.Name, await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false)));
+            }
+        }
+        return logs;
     }
 
     /// <summary>Creates a generated resource instance.</summary>
@@ -261,10 +358,14 @@ public sealed record InstancePage(JsonElement Items, string? Continue);
 /// <summary>A declared KRO resource and its matching live object.</summary>
 /// <param name="ResourceId">The resource id declared by the RGD.</param>
 /// <param name="Object">The Kubernetes object carrying the matching kro.run/instance-id label.</param>
-public sealed record ComposedResourceSummary(string ResourceId, JsonElement Object);
+/// <param name="ParentResourceName">The composed workload name when this entry is a Pod discovered from that workload.</param>
+public sealed record ComposedResourceSummary(string ResourceId, JsonElement Object, string? ParentResourceName = null);
 
 /// <summary>Read-only composed resource results with explicit partial-inspection warnings.</summary>
 /// <param name="Resources">The children returned by Kubernetes.</param>
 /// <param name="Warnings">Reasons some declared resource types may be missing.</param>
 /// <param name="Complete">Whether all declared types were inspected without warnings.</param>
 public sealed record ComposedResourcesInspection(IReadOnlyList<ComposedResourceSummary> Resources, IReadOnlyList<string> Warnings, bool Complete);
+
+/// <summary>Recent log output for one container.</summary>
+public sealed record ResourceLogEntry(string PodName, string Container, string Text);
