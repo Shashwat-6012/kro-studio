@@ -1,0 +1,46 @@
+/* Design tokens — the existing KRO Studio purple theme, centralised. */
+:root {
+  --font-sans: 'DM Sans', system-ui, sans-serif;
+  --font-display: 'Manrope', 'DM Sans', sans-serif;
+  --font-mono: 'DM Mono', ui-monospace, monospace;
+
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+
+  --ink: #222632;
+  --ink-2: #454957;
+  --ink-3: #5f6372;
+  --muted: #858b9a;
+  --faint: #a0a3ae;
+
+  --bg: #f8f9fb;
+  --surface: #ffffff;
+  --surface-2: #fbfbfd;
+  --line: #e8eaf0;
+  --line-soft: #f0f1f4;
+
+  --purple-700: #5845c1;
+  --purple-600: #6754d3;
+  --purple-500: #6d56d9;
+  --purple-ink: #594cbb;
+  --purple-100: #ece9fa;
+  --purple-50: #f1effd;
+  --purple-25: #f7f5ff;
+
+  --success: #3d9c72;  --success-bg: #eaf6ef;  --success-line: #d8ecdf;
+  --warning: #b98639;  --warning-bg: #fbf3e5;  --warning-line: #f1e5d0;
+  --danger: #bf4f55;   --danger-bg: #fff0f0;   --danger-line: #f1d8d6;
+  --neutral: #858b9a;  --neutral-bg: #f2f2f5;
+  --dark: #272739;
+
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px #24253a0d;
+  --shadow-md: 0 8px 24px #25243a18;
+  --shadow-lg: 0 20px 80px #1d1b3260;
+
+  --sidebar-w: 248px;
+}
