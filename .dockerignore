@@ -1,0 +1,9 @@
+.git
+.vs
+**/bin
+**/obj
+**/node_modules
+**/dist
+**/coverage
+**/tsconfig.tsbuildinfo
+**/.DS_Store

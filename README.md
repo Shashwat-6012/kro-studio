@@ -4,9 +4,9 @@ KRO Studio is a local-first workspace for managing KRO ResourceGraphDefinitions 
 
 ## Projects
 
-- `src/KroStudio.UI`: React, TypeScript, and Vite UI.
-- `src/KroStudio.Web`: .NET 10 Minimal API and Kubernetes client integration.
-- `deploy/docker`: API-only container packaging.
+- `src/Web`: React, TypeScript, and Vite UI.
+- `src/Hub`: .NET 10 Minimal API and Kubernetes client integration.
+- `deploy/docker`: single-image UI and API container packaging.
 - `docs`: product requirements, architecture, and authentication/RBAC design.
 
 Backend code uses capability-based feature folders. Each feature owns its routes, request validation, and application service; Kubernetes client creation and API error mapping live in shared infrastructure. Nullable reference types and warnings-as-errors are enabled.
@@ -17,11 +17,11 @@ Prerequisites: .NET 10 SDK, Node.js 24, and npm.
 
 Run the API and UI as separate processes:
 
-1. From the repository root, start the API with `dotnet run --project src/KroStudio.Web --launch-profile http`. It listens at `http://localhost:5244`.
-2. In another terminal, start the UI with `cd src/KroStudio.UI`, then `npm run dev`.
+1. From the repository root, start the API with `dotnet run --project src/Hub --launch-profile http`. It listens at `http://localhost:5244`.
+2. In another terminal, start the UI with `cd src/Web`, then `npm run dev`.
 3. Open the Vite URL printed in the UI terminal (normally `http://localhost:5173`).
 
-The API exposes its versioned routes under `/api/v1` and a liveness endpoint at `/health`. It returns no HTML or static assets. Vite forwards `/api` requests to the API in local development. If the UI uses a different origin, add it to `Cors:AllowedOrigins` in API configuration.
+The API exposes its versioned routes under `/api/v1` and a liveness endpoint at `/health`. In local development, Vite serves the UI and forwards `/api` requests to the API. The Docker image copies the built UI into the Hub's `wwwroot`, where the Hub serves static assets and the SPA fallback. If a separately hosted UI calls the API directly, add its origin to `Cors:AllowedOrigins` in API configuration.
 
 Both processes can start without a cluster. The API reports a disconnected state until Kubernetes is reachable. Set `KUBECONFIG` and optionally `KUBECONTEXT` before starting the API, or set `Kubernetes:KubeconfigPath` and `Kubernetes:Context` in configuration. Credentials remain on the backend.
 
@@ -39,16 +39,16 @@ When a cluster is connected but KRO's `ResourceGraphDefinition` API is missing, 
 
 Validation uses Kubernetes server-side dry-run and does not persist the RGD. KRO acceptance is reported later through the stored RGD conditions. Dynamic API discovery does not enable instance operations until the resource is present in API discovery.
 
-## Run the API in Docker
+## Run the UI and API in Docker
 
-The image contains the API only. It neither installs Node.js nor builds or includes the UI.
+Compose builds one image containing the React UI and ASP.NET Core Hub. The Hub serves the UI from `wwwroot`, provides the SPA fallback, and handles `/api` requests on the same origin. The Hub reads the mounted kubeconfig.
 
 ```powershell
 $env:KUBECONFIG_PATH = "$HOME\.kube\config"
 docker compose -f deploy/docker/docker-compose.yml up --build
 ```
 
-Open `http://127.0.0.1:8080/health` to check that the API is running. Run the UI using its own development server or deployment. Do not expose the unauthenticated MVP API to a shared network; cluster operations use the configured kubeconfig identity.
+Open `http://127.0.0.1:8080` to use the UI. The UI and `/api/v1` endpoints share that origin; `http://127.0.0.1:8080/health` checks the Hub. Set `UI_PORT` to change the host port and `KUBECONTEXT` to select a kubeconfig context. Compose publishes one port for the combined Hub and UI. Do not expose the unauthenticated MVP UI/API to a shared network; cluster operations use the configured kubeconfig identity.
 
 ## Current backend capabilities
 

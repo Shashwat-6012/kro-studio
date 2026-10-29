@@ -149,7 +149,7 @@ For composed-resource inspection, query only resource types declared by the matc
 
 ### Current backend implementation boundary
 
-The Web project is an API-only process. It does not load or serve React assets and does not reference the UI build output. The current local workflow runs Vite and ASP.NET Core independently; the Vite proxy may forward API calls during development, and other UI hosts can call the API through its configured CORS origins. Route groups and services are organized by vertical feature under `Features`, while Kubernetes client construction and exception mapping are shared infrastructure.
+The Hub serves the React build from `wwwroot` when static files are present. The Docker build compiles the UI and copies its output into the Hub's published `wwwroot`; ASP.NET Core serves the assets and SPA fallback alongside the API routes on port 8080. Local development can still run Vite and ASP.NET Core independently, with Vite forwarding API calls. Other UI hosts can call the API directly through its configured CORS origins. Route groups and services are organized by vertical feature under `Features`, while Kubernetes client construction and exception mapping are shared infrastructure.
 
 ### Frontend areas
 
