@@ -34,8 +34,9 @@ if (app.Environment.IsDevelopment())
 
 app.UseExceptionHandler();
 app.UseCors("Ui");
+app.UseDefaultFiles();
+app.UseStaticFiles();
 
-app.MapGet("/", () => Results.Problem("KRO Studio API is running. Use /api/v1 or /health.", statusCode: StatusCodes.Status404NotFound));
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" })).WithName("GetHealth").WithTags("Health");
 RouteGroupBuilder api = app.MapGroup("/api/v1");
 api.MapConnectionEndpoints();
@@ -43,6 +44,11 @@ api.MapResourceGraphDefinitionEndpoints();
 api.MapGeneratedApiEndpoints();
 api.MapInstanceEndpoints();
 api.MapRbacAdvisorEndpoints();
+
+// Keep unknown API paths as API 404s instead of returning the SPA document.
+app.MapMethods("/api/{**path}", ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], () => Results.NotFound());
+app.MapFallbackToFile("{*path:nonfile}", "index.html");
+
 app.Run();
 
 /// <summary>Provides the application entry point for integration hosting.</summary>
