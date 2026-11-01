@@ -1,6 +1,6 @@
 # KRO Studio Authentication and RBAC Design
 
-**Status:** MVP design, aligned with the proposed local-first architecture  
+**Status:** Implemented configuration modes; deployment-specific OIDC and Kubernetes credentials are operator supplied
 **Audience:** Contributors, cluster administrators, and users deploying KRO Studio  
 **Related documents:** [Architecture and design](architecture-and-design.md), [project blueprint](kro-studio-project-documentation.md)
 
@@ -12,12 +12,26 @@ The MVP is a single-user, local-first application instance. Its backend reads a 
 
 | Concern | MVP design | Later/shared deployment |
 | --- | --- | --- |
-| Person to KRO Studio | Local operator on a loopback-bound instance; no separate account system is defined for MVP | Require an explicitly configured user authentication layer, such as an authenticated reverse proxy or platform identity provider |
-| KRO Studio backend to Kubernetes | Runtime-provided kubeconfig; use its current context and credentials | A separately designed in-cluster mode may use a dedicated service account |
+| Person to KRO Studio | `UserAuth:Mode=none` for local use, or OIDC authorization-code sign-in with an opaque cookie backed by a server-side authentication ticket | OIDC provider configured by `UserAuth:Oidc:*` |
+| KRO Studio backend to Kubernetes | `Kubernetes:AuthMode=serviceAccount` uses runtime kubeconfig by default; `Kubernetes:InCluster=true` uses the pod's service account | `Kubernetes:AuthMode=impersonation` forwards the authenticated OIDC username and configured group claims as Kubernetes impersonation headers |
 | Kubernetes authorization | Kubernetes RBAC is authoritative; no permission is inferred from hidden UI controls | Still authoritative; application identity-to-cluster identity mapping must be designed before team access |
 | Credential delivery | Runtime file/configuration to backend only; never image, repository, or browser bundle | Secret and identity lifecycle must be owned by the deployment platform |
 
-The MVP does not promise per-user Kubernetes impersonation or a multi-user session model. If multiple people can reach one backend, they all exercise the backend's configured Kubernetes identity unless a future design explicitly maps authenticated users to distinct Kubernetes credentials. Do not expose the MVP backend as a shared service on the assumption that local loopback behavior is an authentication system.
+OIDC user authentication and Kubernetes authentication are independent settings. Impersonation requires `UserAuth:Mode=oidc`; OIDC establishes the caller and the Kubernetes client uses a configured kubeconfig identity that must be authorized to impersonate the requested users and groups. Service-account mode shares the configured backend Kubernetes identity across signed-in users. Do not expose `UserAuth:Mode=none` to untrusted networks.
+
+### Runtime configuration
+
+Set `UserAuth:Mode=oidc`, `UserAuth:Oidc:Authority`, and `UserAuth:Oidc:ClientId` to enable sign-in. Supply `UserAuth:Oidc:ClientSecret` through a secret store or environment variable when the provider requires a confidential client. The provider must allow the Hub callback at `/signin-oidc`. The login endpoint is `/auth/login`; logout is a POST to `/auth/logout`. The API returns 401 for unauthenticated API calls.
+
+Set `Kubernetes:AuthMode=serviceAccount` to use the backend identity. For a pod deployment, set `Kubernetes:InCluster=true` and grant the pod's service account the required RBAC. For a local service-account identity, leave `InCluster=false` and provide `KUBECONFIG` or `Kubernetes:KubeconfigPath` (and optionally `KUBECONTEXT`).
+
+Set `Kubernetes:AuthMode=impersonation` to use the authenticated identity. Configure `UserAuth:Oidc:UsernameClaim` (default `preferred_username`) and `UserAuth:Oidc:GroupsClaim` (default `groups`) to match the provider's claims. The Hub sends those values through Kubernetes `Impersonate-User` and `Impersonate-Group` headers. The configured base Kubernetes identity must have the Kubernetes `impersonate` verb for the corresponding users and groups. The OIDC access token is not sent to Kubernetes. A missing username claim fails closed. Impersonation uses a kubeconfig identity as its credential source and cannot be combined with `Kubernetes:InCluster=true`.
+
+### BFF browser session
+
+In OIDC mode, React obtains session state from `GET /auth/session` and starts login with a top-level navigation to `/auth/login`. The Hub completes the authorization-code flow, validates the OIDC response, and stores the authentication ticket in `IDistributedCache`; the browser receives an HttpOnly cookie containing only an opaque ticket key. Access and refresh tokens are not retained; the ID token is kept only in the server-side ticket to support provider logout. No OIDC token is exposed to React. API calls are same-origin and use the session cookie automatically. `GET /auth/session` also issues the antiforgery request token; React sends it in `X-CSRF-TOKEN` for every unsafe `/api/v1` request, while the sign-out form posts it as the antiforgery form field. The Hub checks that token before allowing a mutation. Unauthenticated API requests return 401 rather than redirecting an XHR to the identity provider.
+
+The default cache is process-local memory for a single Hub instance. Multi-instance production deployments must provide a shared `IDistributedCache` and shared protected Data Protection keys. Set up TLS at the browser-facing endpoint and ensure forwarded host/protocol handling is configured correctly when TLS terminates at a proxy. Follow [the local Keycloak guide](local-keycloak-oidc.md) for a complete development walkthrough.
 
 ## 2. Two authentication hops
 
