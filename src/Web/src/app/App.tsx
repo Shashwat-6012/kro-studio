@@ -3,6 +3,7 @@ import { RouterProvider } from 'react-router-dom';
 import { ToastProvider } from '../components/Toast';
 import { NamespaceProvider } from './NamespaceProvider';
 import { router } from './routes';
+import { AuthProvider } from './AuthProvider';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 4_000, retry: 1, refetchOnWindowFocus: false } },
@@ -11,11 +12,13 @@ const queryClient = new QueryClient({
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <ToastProvider>
-        <NamespaceProvider>
-          <RouterProvider router={router} />
-        </NamespaceProvider>
-      </ToastProvider>
+      <AuthProvider>
+        <ToastProvider>
+          <NamespaceProvider>
+            <RouterProvider router={router} />
+          </NamespaceProvider>
+        </ToastProvider>
+      </AuthProvider>
     </QueryClientProvider>
   );
 }

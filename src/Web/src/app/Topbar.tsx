@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useIsFetching, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
-import { RefreshCw, RotateCw } from 'lucide-react';
+import { LogOut, RefreshCw, RotateCw } from 'lucide-react';
 import { useCluster, useRestartKro } from '../api/hooks';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { useAuth } from './AuthProvider';
 
 const SECTIONS: Record<string, string> = { graphs: 'Resource graphs', instances: 'Instances', apis: 'API catalog', rbac: 'RBAC advisor' };
 
@@ -22,6 +23,7 @@ export function Topbar() {
   const queryClient = useQueryClient();
   const fetching = useIsFetching() > 0;
   const restart = useRestartKro();
+  const { session } = useAuth();
   const [confirmRestart, setConfirmRestart] = useState(false);
 
   return (
@@ -39,6 +41,7 @@ export function Topbar() {
         <div className="connection-indicator" title={connection?.message}><span className={`dot dot--${connected ? 'green' : 'amber'}`} />{connected ? 'Cluster connected' : 'Cluster disconnected'}</div>
         {kroReady && <button className="btn btn--sm" onClick={() => setConfirmRestart(true)}><RotateCw size={14} />Restart controller</button>}
         <button className="icon-btn" aria-label="Refresh data" title="Refresh all data" onClick={() => void queryClient.invalidateQueries()}><RefreshCw size={16} className={fetching ? 'spin' : ''} /></button>
+        {session.authenticationEnabled && <><span className="muted-text" title={session.user ?? undefined}>{session.user}</span><form action="/auth/logout" method="post"><input type="hidden" name="__RequestVerificationToken" value={session.csrfToken ?? ''} /><button className="btn btn--sm" type="submit"><LogOut size={14} />Sign out</button></form></>}
       </div>
       {confirmRestart && (
         <ConfirmDialog

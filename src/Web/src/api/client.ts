@@ -8,6 +8,8 @@ export class ApiError extends Error {
 }
 
 export const enc = encodeURIComponent;
+let csrfToken: string | null = null;
+export const setCsrfToken = (token: string | null) => { csrfToken = token; };
 
 /** Builds a query string, skipping null / undefined / empty values. */
 export function qs(params: Record<string, string | number | boolean | null | undefined>): string {
@@ -21,10 +23,16 @@ export function qs(params: Record<string, string | number | boolean | null | und
 }
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers: HeadersInit = { ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...init?.headers };
+  const method = (init?.method ?? 'GET').toUpperCase();
+  const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(method);
+  const headers: HeadersInit = {
+    ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+    ...(unsafe && csrfToken ? { 'X-CSRF-TOKEN': csrfToken } : {}),
+    ...init?.headers,
+  };
   let response: Response;
   try {
-    response = await fetch(path, { ...init, headers });
+    response = await fetch(path, { ...init, headers, credentials: 'same-origin' });
   } catch {
     throw new ApiError('The local API is not reachable. Start the API and try again.', 0);
   }
