@@ -58,7 +58,11 @@ export type InstanceResourcesResponse = { resources: ComposedResource[]; warning
 export type EventsResponse = { items: K8sObject[] };
 export type ContainerLog = { podName: string; container: string; text: string };
 
-// ---- RBAC advisor ----------------------------------------------------------
+// ---- RBAC manager ----------------------------------------------------------
+export type RbacObjectKind = 'ClusterRole' | 'Role' | 'ClusterRoleBinding' | 'RoleBinding';
+export type RbacObjectList = { items: K8sObject[]; metadata?: Record<string, any> };
+
+// ---- RBAC advisor (retained API contract) ----------------------------------
 export type FindingStatus = 'allowed' | 'denied' | 'unknown' | 'observed failure' | 'observed issue';
 export type RbacFinding = {
   identity: string;

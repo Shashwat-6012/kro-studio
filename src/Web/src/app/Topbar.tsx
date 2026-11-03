@@ -6,7 +6,7 @@ import { useCluster, useRestartKro } from '../api/hooks';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { useAuth } from './AuthProvider';
 
-const SECTIONS: Record<string, string> = { graphs: 'Resource graphs', instances: 'Instances', apis: 'API catalog', rbac: 'RBAC advisor' };
+const SECTIONS: Record<string, string> = { graphs: 'Resource graphs', instances: 'Instances', apis: 'API catalog', rbac: 'Roles & bindings' };
 
 function useBreadcrumbs() {
   const { pathname } = useLocation();

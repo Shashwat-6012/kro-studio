@@ -7,7 +7,7 @@ import { InstancesPage } from '../features/instances/InstancesPage';
 import { InstanceDetailPage } from '../features/instances/InstanceDetailPage';
 import { ApiCatalogPage } from '../features/api-catalog/ApiCatalogPage';
 import { ApiDetailPage } from '../features/api-catalog/ApiDetailPage';
-import { RbacAdvisorPage } from '../features/rbac/RbacAdvisorPage';
+import { RbacManagerPage } from '../features/rbac/RbacManagerPage';
 
 export const router = createBrowserRouter([
   {
@@ -21,7 +21,7 @@ export const router = createBrowserRouter([
       { path: 'instances/:graph/:name', element: <InstanceDetailPage /> },
       { path: 'apis', element: <ApiCatalogPage /> },
       { path: 'apis/:apiId', element: <ApiDetailPage /> },
-      { path: 'rbac', element: <RbacAdvisorPage /> },
+      { path: 'rbac', element: <RbacManagerPage /> },
       { path: '*', element: <Navigate to="/" replace /> },
     ],
   },

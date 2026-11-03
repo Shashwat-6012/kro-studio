@@ -2,7 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { ApiError, messageOf } from './client';
 import { clusterApi, definitionsApi, instancesApi, rbacApi } from './endpoints';
 import { keys } from './queryKeys';
-import type { Connection, Definition, GeneratedApi, K8sObject, RbacApplyRequest } from './types';
+import type { Connection, Definition, GeneratedApi, K8sObject, RbacApplyRequest, RbacObjectKind } from './types';
 import { useToast } from '../components/Toast';
 import { objectName } from '../lib/k8s';
 
@@ -226,6 +226,36 @@ export function useDeleteInstance() {
 }
 
 // ---- RBAC advisor ----------------------------------------------------------
+export function useRbacObjects(kind: RbacObjectKind, namespace?: string) {
+  return useQuery({
+    queryKey: keys.rbacObjects(kind, namespace),
+    queryFn: () => rbacApi.list(kind, namespace),
+    retry: false,
+  });
+}
+
+function useRbacMutation<TVariables>(mutationFn: (variables: TVariables) => Promise<unknown>, success: (variables: TVariables) => string) {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn,
+    onSuccess: (_result, variables) => { toast.success(success(variables)); void queryClient.invalidateQueries({ queryKey: ['rbac-objects'] }); },
+    onError: (error) => toast.error(messageOf(error)),
+  });
+}
+
+export function useCreateRbacObject() {
+  return useRbacMutation(({ kind, yaml }: { kind: RbacObjectKind; yaml: string }) => rbacApi.create(kind, yaml), ({ kind }) => `${kind} created.`);
+}
+
+export function useUpdateRbacObject() {
+  return useRbacMutation(({ kind, name, namespace, yaml }: { kind: RbacObjectKind; name: string; namespace?: string; yaml: string }) => rbacApi.update(kind, name, namespace, yaml), ({ kind, name }) => `${kind}/${name} updated.`);
+}
+
+export function useDeleteRbacObject() {
+  return useRbacMutation(({ kind, name, namespace }: { kind: RbacObjectKind; name: string; namespace?: string }) => rbacApi.remove(kind, name, namespace), ({ kind, name }) => `${kind}/${name} deleted.`);
+}
+
 export function useRbacReport(params: { definitionName: string; namespace: string; instanceName: string }) {
   return useQuery({
     queryKey: keys.rbacReport(params.definitionName, params.namespace, params.instanceName),

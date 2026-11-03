@@ -1,7 +1,7 @@
 import { enc, jsonBody, qs, request } from './client';
 import type {
   Capability, Connection, ContainerLog, Definition, EventsResponse, GeneratedApi, InstallationResult, InstancePage,
-  InstanceResourcesResponse, K8sObject, KroInstallation, MessageResponse, RbacApplyRequest, RbacApplyResult, RbacPlan, RbacReport,
+  InstanceResourcesResponse, K8sObject, KroInstallation, MessageResponse, RbacApplyRequest, RbacApplyResult, RbacObjectKind, RbacObjectList, RbacPlan, RbacReport,
 } from './types';
 
 const base = '/api/v1';
@@ -54,6 +54,16 @@ export const instancesApi = {
 };
 
 export const rbacApi = {
+  list: (kind: RbacObjectKind, namespace?: string) =>
+    request<RbacObjectList>(`${base}/rbac/objects/${enc(kind)}${qs({ namespace })}`),
+  get: (kind: RbacObjectKind, name: string, namespace?: string) =>
+    request<K8sObject>(`${base}/rbac/objects/${enc(kind)}/${enc(name)}${qs({ namespace })}`),
+  create: (kind: RbacObjectKind, yaml: string) =>
+    request<K8sObject>(`${base}/rbac/objects/${enc(kind)}`, { method: 'POST', body: jsonBody({ yaml }) }),
+  update: (kind: RbacObjectKind, name: string, namespace: string | undefined, yaml: string) =>
+    request<K8sObject>(`${base}/rbac/objects/${enc(kind)}/${enc(name)}${qs({ namespace })}`, { method: 'PUT', body: jsonBody({ yaml }) }),
+  remove: (kind: RbacObjectKind, name: string, namespace?: string) =>
+    request<void>(`${base}/rbac/objects/${enc(kind)}/${enc(name)}${qs({ namespace })}`, { method: 'DELETE' }),
   report: (params: { definitionName?: string; namespace?: string; instanceName?: string }) =>
     request<RbacReport>(`${base}/rbac-advisor${qs(params)}`),
   plan: (definitionName: string, namespace?: string) =>

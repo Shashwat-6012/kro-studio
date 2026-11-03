@@ -6,7 +6,7 @@ using KroStudio.Web.Infrastructure.Kubernetes;
 
 namespace KroStudio.Web.Features.RbacAdvisor;
 
-/// <summary>Checks KRO Studio and KRO controller authorization and prepares explicit RBAC changes.</summary>
+/// <summary>Manages Kubernetes RBAC objects and retains the former KRO authorization advisor operations.</summary>
 internal sealed class RbacAdvisorService(KubernetesClientFactory clientFactory)
 {
     private const string AuthzGroup = "authorization.k8s.io";
@@ -17,6 +17,79 @@ internal sealed class RbacAdvisorService(KubernetesClientFactory clientFactory)
     private const string KroServiceAccount = "kro";
     private const string ManagedLabel = "app.kro.run/managed-by";
     private const string ManagedValue = "kro-studio";
+
+    private static readonly IReadOnlyDictionary<string, RbacResource> ManagedResources = new Dictionary<string, RbacResource>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["ClusterRole"] = new("clusterroles", false),
+        ["Role"] = new("roles", true),
+        ["ClusterRoleBinding"] = new("clusterrolebindings", false),
+        ["RoleBinding"] = new("rolebindings", true)
+    };
+
+    /// <summary>Lists RBAC roles or bindings using the identity associated with the current request.</summary>
+    public async Task<JsonElement> ListManagedObjectsAsync(string kind, string? @namespace, CancellationToken cancellationToken)
+    {
+        RbacResource resource = GetManagedResource(kind);
+        Kubernetes client = clientFactory.GetClient();
+        object response = resource.Namespaced && !string.IsNullOrWhiteSpace(@namespace)
+            ? await client.CustomObjects.ListNamespacedCustomObjectAsync(RbacGroup, RbacVersion, ValidateNamespace(@namespace), resource.Plural, cancellationToken: cancellationToken).ConfigureAwait(false)
+            : await client.CustomObjects.ListClusterCustomObjectAsync(RbacGroup, RbacVersion, resource.Plural, cancellationToken: cancellationToken).ConfigureAwait(false);
+        return ToJson(response);
+    }
+
+    /// <summary>Reads one role or binding using the identity associated with the current request.</summary>
+    public async Task<JsonElement> GetManagedObjectAsync(string kind, string name, string? @namespace, CancellationToken cancellationToken)
+    {
+        RbacResource resource = GetManagedResource(kind);
+        string validatedName = ValidateName(name);
+        Kubernetes client = clientFactory.GetClient();
+        object response = resource.Namespaced
+            ? await client.CustomObjects.GetNamespacedCustomObjectAsync(RbacGroup, RbacVersion, ValidateNamespace(@namespace), resource.Plural, validatedName, cancellationToken).ConfigureAwait(false)
+            : await client.CustomObjects.GetClusterCustomObjectAsync(RbacGroup, RbacVersion, resource.Plural, validatedName, cancellationToken: cancellationToken).ConfigureAwait(false);
+        return ToJson(response);
+    }
+
+    /// <summary>Creates a role or binding after validating its Kubernetes kind and scope.</summary>
+    public async Task<JsonElement> CreateManagedObjectAsync(string kind, JsonElement manifest, string? @namespace, CancellationToken cancellationToken)
+    {
+        RbacResource resource = GetManagedResource(kind);
+        ValidateManagedManifest(kind, resource, manifest, @namespace, requireResourceVersion: false);
+        Kubernetes client = clientFactory.GetClient();
+        object response = resource.Namespaced
+            ? await client.CustomObjects.CreateNamespacedCustomObjectAsync(manifest, RbacGroup, RbacVersion, ValidateNamespace(@namespace), resource.Plural, cancellationToken: cancellationToken).ConfigureAwait(false)
+            : await client.CustomObjects.CreateClusterCustomObjectAsync(manifest, RbacGroup, RbacVersion, resource.Plural, cancellationToken: cancellationToken).ConfigureAwait(false);
+        return ToJson(response);
+    }
+
+    /// <summary>Replaces a role or binding while preserving Kubernetes resource-version conflict handling.</summary>
+    public async Task<JsonElement> UpdateManagedObjectAsync(string kind, string name, JsonElement manifest, string? @namespace, CancellationToken cancellationToken)
+    {
+        RbacResource resource = GetManagedResource(kind);
+        string validatedName = ValidateName(name);
+        ValidateManagedManifest(kind, resource, manifest, @namespace, requireResourceVersion: true);
+        if (!string.Equals(validatedName, manifest.GetProperty("metadata").GetProperty("name").GetString(), StringComparison.Ordinal))
+            throw new ArgumentException("The route name must match metadata.name in the manifest.", nameof(manifest));
+        string? validatedNamespace = resource.Namespaced
+            ? ValidateNamespace(@namespace ?? manifest.GetProperty("metadata").GetProperty("namespace").GetString())
+            : null;
+        Kubernetes client = clientFactory.GetClient();
+        object response = resource.Namespaced
+            ? await client.CustomObjects.ReplaceNamespacedCustomObjectAsync(manifest, RbacGroup, RbacVersion, validatedNamespace!, resource.Plural, validatedName, cancellationToken: cancellationToken).ConfigureAwait(false)
+            : await client.CustomObjects.ReplaceClusterCustomObjectAsync(manifest, RbacGroup, RbacVersion, resource.Plural, validatedName, cancellationToken: cancellationToken).ConfigureAwait(false);
+        return ToJson(response);
+    }
+
+    /// <summary>Deletes a role or binding using the identity associated with the current request.</summary>
+    public async Task DeleteManagedObjectAsync(string kind, string name, string? @namespace, CancellationToken cancellationToken)
+    {
+        RbacResource resource = GetManagedResource(kind);
+        string validatedName = ValidateName(name);
+        Kubernetes client = clientFactory.GetClient();
+        if (resource.Namespaced)
+            await client.CustomObjects.DeleteNamespacedCustomObjectAsync(RbacGroup, RbacVersion, ValidateNamespace(@namespace), resource.Plural, validatedName, cancellationToken: cancellationToken).ConfigureAwait(false);
+        else
+            await client.CustomObjects.DeleteClusterCustomObjectAsync(RbacGroup, RbacVersion, resource.Plural, validatedName, cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
 
     private static readonly PermissionRequirement[] StudioRequirements =
     [
@@ -38,7 +111,7 @@ internal sealed class RbacAdvisorService(KubernetesClientFactory clientFactory)
         new("Inspect namespace role bindings", "list", RbacGroup, "rolebindings", null),
         new("Inspect namespace roles", "list", RbacGroup, "roles", null),
         new("Create controller roles", "create", RbacGroup, "clusterroles", null),
-          new("Update controller roles", "patch", RbacGroup, "clusterroles", null),
+        new("Update controller roles", "patch", RbacGroup, "clusterroles", null),
         new("Create controller role bindings", "create", RbacGroup, "clusterrolebindings", null)
     ];
 
@@ -576,6 +649,52 @@ internal sealed class RbacAdvisorService(KubernetesClientFactory clientFactory)
         return true;
     }
 
+    private static RbacResource GetManagedResource(string kind) => ManagedResources.TryGetValue(kind, out RbacResource? resource)
+        ? resource
+        : throw new ArgumentException("Supported RBAC kinds are ClusterRole, Role, ClusterRoleBinding, and RoleBinding.", nameof(kind));
+
+    private static void ValidateManagedManifest(string kind, RbacResource resource, JsonElement manifest, string? @namespace, bool requireResourceVersion)
+    {
+        if (manifest.ValueKind != JsonValueKind.Object ||
+            !manifest.TryGetProperty("apiVersion", out JsonElement apiVersion) || apiVersion.GetString() != $"{RbacGroup}/{RbacVersion}" ||
+            !manifest.TryGetProperty("kind", out JsonElement manifestKind) || !string.Equals(manifestKind.GetString(), kind, StringComparison.OrdinalIgnoreCase) ||
+            !manifest.TryGetProperty("metadata", out JsonElement metadata) || metadata.ValueKind != JsonValueKind.Object ||
+            !metadata.TryGetProperty("name", out JsonElement name) || string.IsNullOrWhiteSpace(name.GetString()))
+        {
+            throw new ArgumentException($"Manifest must be an rbac.authorization.k8s.io/v1 {kind} with metadata.name.", nameof(manifest));
+        }
+
+        if (requireResourceVersion && (!metadata.TryGetProperty("resourceVersion", out JsonElement resourceVersion) || resourceVersion.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(resourceVersion.GetString())))
+            throw new ArgumentException("An update requires metadata.resourceVersion from the current Kubernetes object.", nameof(manifest));
+
+        if (resource.Namespaced)
+        {
+            if (!metadata.TryGetProperty("namespace", out JsonElement manifestNamespace) || string.IsNullOrWhiteSpace(manifestNamespace.GetString()))
+                throw new ArgumentException($"Manifest metadata.namespace is required for {kind}.", nameof(manifest));
+            string validatedNamespace = ValidateNamespace(@namespace ?? manifestNamespace.GetString());
+            if (!string.Equals(validatedNamespace, manifestNamespace.GetString(), StringComparison.Ordinal))
+                throw new ArgumentException("The namespace query parameter must match metadata.namespace in the manifest.", nameof(manifest));
+        }
+        else if (metadata.TryGetProperty("namespace", out JsonElement clusterNamespace) && clusterNamespace.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(clusterNamespace.GetString()))
+        {
+            throw new ArgumentException($"{kind} is cluster-scoped and must not include metadata.namespace.", nameof(manifest));
+        }
+    }
+
+    private static string ValidateName(string name) => string.IsNullOrWhiteSpace(name)
+        ? throw new ArgumentException("A resource name is required.", nameof(name))
+        : name;
+
+    private static string ValidateNamespace(string? @namespace) => string.IsNullOrWhiteSpace(@namespace)
+        ? throw new ArgumentException("A namespace is required for namespaced RBAC resources.", nameof(@namespace))
+        : @namespace;
+
+    private static JsonElement ToJson(object value)
+    {
+        using JsonDocument document = JsonDocument.Parse(KubernetesJson.Serialize(value));
+        return document.RootElement.Clone();
+    }
+
     private static bool Contains(JsonElement rule, string property, string value) => rule.TryGetProperty(property, out JsonElement values) && values.ValueKind == JsonValueKind.Array && values.EnumerateArray().Any(item => item.GetString() is "*" || item.GetString() == value);
     private static bool HasManagedLabel(JsonElement root) => root.TryGetProperty("metadata", out JsonElement meta) && meta.TryGetProperty("labels", out JsonElement labels) && labels.TryGetProperty(ManagedLabel, out JsonElement value) && value.GetString() == ManagedValue;
     private static string DisplayGroup(string value) => value.Length == 0 ? "core" : value;
@@ -593,6 +712,7 @@ internal sealed class RbacAdvisorService(KubernetesClientFactory clientFactory)
     private static string SafeMessage(Exception exception) => GetKubernetesStatusCode(exception) == 403 ? "Kubernetes denied access needed to inspect this RGD or discover its resource permissions." : exception.Message;
 }
 
+internal sealed record RbacResource(string Plural, bool Namespaced);
 internal sealed record PermissionRequirement(string Label, string Verb, string ApiGroup, string Resource, string? Namespace);
 internal sealed record RbacFinding(string Identity, string Check, string Status, string Verb, string ApiGroup, string Resource, string? Namespace, string Detail, string Source);
 internal sealed record RbacAdvisorReport(string StudioIdentity, string ControllerIdentity, DateTimeOffset CheckedAt, IReadOnlyList<RbacFinding> Studio, IReadOnlyList<RbacFinding> Controller, string Note);

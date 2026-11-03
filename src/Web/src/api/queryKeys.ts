@@ -10,5 +10,6 @@ export const keys = {
   instanceResources: (definition: string, name: string, namespace: string | undefined) => ['instance', definition, namespace ?? null, name, 'resources'] as const,
   instanceEvents: (definition: string, name: string, namespace: string | undefined) => ['instance', definition, namespace ?? null, name, 'events'] as const,
   resourceLogs: (definition: string, name: string, resource: string, namespace: string | undefined) => ['instance', definition, namespace ?? null, name, 'logs', resource] as const,
+  rbacObjects: (kind: string, namespace: string | undefined) => ['rbac-objects', kind, namespace ?? null] as const,
   rbacReport: (definitionName: string, namespace: string, instanceName: string) => ['rbac', definitionName, namespace, instanceName] as const,
 };

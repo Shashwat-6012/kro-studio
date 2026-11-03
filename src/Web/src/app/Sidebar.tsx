@@ -30,7 +30,7 @@ export function Sidebar() {
         <NavItem to="/graphs" icon={<GitBranch size={17} />} label="Resource graphs" count={definitions?.length} />
         <NavItem to="/instances" icon={<Box size={17} />} label="Instances" />
         <NavItem to="/apis" icon={<Database size={17} />} label="API catalog" />
-        <NavItem to="/rbac" icon={<ShieldCheck size={17} />} label="RBAC advisor" />
+        <NavItem to="/rbac" icon={<ShieldCheck size={17} />} label="Roles & bindings" />
       </nav>
       <div className="side-label side-label--spaced">Tools</div>
       <nav className="nav">
