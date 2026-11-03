@@ -49,7 +49,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { ...init, headers: { ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...init?.headers } });
   if (!response.ok) {
     let detail = `Request failed (${response.status})`;
-    try { const body = await response.json(); detail = body.detail ?? body.title ?? body.message ?? detail; } catch { /* response has no JSON body */ }
+    try {
+      const body = await response.json();
+      detail = body.code === 'kubernetes_forbidden'
+        ? `${body.title ?? 'Kubernetes permission denied'}: ${body.detail ?? 'The Kubernetes API server denied this operation.'}`
+        : body.detail ?? body.title ?? body.message ?? detail;
+    } catch { /* response has no JSON body */ }
     throw new Error(detail);
   }
   if (response.status === 204) return undefined as T;

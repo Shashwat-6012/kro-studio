@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using KroStudio.Web.Features.Connection;
@@ -55,16 +56,14 @@ public sealed class KubernetesExceptionHandler(ILogger<KubernetesExceptionHandle
         if (exception is k8s.KubernetesException kubernetesException)
         {
             int kubernetesStatus = kubernetesException.Status?.Code ?? 502;
-            return kubernetesStatus switch
-            {
-                400 or 422 => (kubernetesStatus, "Kubernetes rejected the request", SafeKubernetesMessage(kubernetesException), "kubernetes_validation_failed"),
-                401 => (401, "Kubernetes authentication failed", "The Kubernetes API server rejected the configured credentials.", "kubernetes_unauthorized"),
-                403 => (403, "Kubernetes permission denied", SafeKubernetesMessage(kubernetesException), "kubernetes_forbidden"),
-                404 => (404, "Kubernetes resource not found", SafeKubernetesMessage(kubernetesException), "kubernetes_not_found"),
-                409 => (409, "Kubernetes resource conflict", SafeKubernetesMessage(kubernetesException), "kubernetes_conflict"),
-                408 or 504 => (504, "Kubernetes request timed out", "The Kubernetes API server did not respond in time.", "kubernetes_timeout"),
-                _ => (502, "Kubernetes API request failed", "The Kubernetes API server could not complete the request.", "kubernetes_api_error")
-            };
+            return MapKubernetesStatus(kubernetesStatus, SafeKubernetesMessage(kubernetesException));
+        }
+        if (exception is k8s.Autorest.HttpOperationException httpOperationException)
+        {
+            int kubernetesStatus = httpOperationException.Response is null
+                ? 502
+                : (int)httpOperationException.Response.StatusCode;
+            return MapKubernetesStatus(kubernetesStatus, SafeKubernetesMessage(httpOperationException));
         }
         if (exception is FileNotFoundException)
         {
@@ -85,5 +84,49 @@ public sealed class KubernetesExceptionHandler(ILogger<KubernetesExceptionHandle
             return "The Kubernetes API server rejected the request. Check the resource, scope, and configured RBAC permissions.";
         }
         return message.Length <= 1200 ? message : message[..1200];
+    }
+
+    private static (int StatusCode, string Title, string Detail, string Code) MapKubernetesStatus(int statusCode, string message) => statusCode switch
+    {
+        400 or 422 => (statusCode, "Kubernetes rejected the request", message, "kubernetes_validation_failed"),
+        401 => (401, "Kubernetes authentication failed", "The Kubernetes API server rejected the configured credentials.", "kubernetes_unauthorized"),
+        403 => (403, "Kubernetes permission denied", message, "kubernetes_forbidden"),
+        404 => (404, "Kubernetes resource not found", message, "kubernetes_not_found"),
+        409 => (409, "Kubernetes resource conflict", message, "kubernetes_conflict"),
+        408 or 504 => (504, "Kubernetes request timed out", "The Kubernetes API server did not respond in time.", "kubernetes_timeout"),
+        _ => (502, "Kubernetes API request failed", "The Kubernetes API server could not complete the request.", "kubernetes_api_error")
+    };
+
+    private static string SafeKubernetesMessage(k8s.Autorest.HttpOperationException exception)
+    {
+        string? message = exception.Body switch
+        {
+            string body => ReadKubernetesStatusMessage(body),
+            JsonElement element => ReadKubernetesStatusMessage(element.GetRawText()),
+            _ => exception.Body is null ? null : ReadKubernetesStatusMessage(JsonSerializer.Serialize(exception.Body))
+        };
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return "The Kubernetes API server rejected the request. Check the resource, scope, and configured RBAC permissions.";
+        }
+        return message.Length <= 1200 ? message : message[..1200];
+    }
+
+    private static string? ReadKubernetesStatusMessage(string body)
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(body);
+            if (document.RootElement.TryGetProperty("message", out JsonElement message) ||
+                document.RootElement.TryGetProperty("Message", out message))
+            {
+                return message.ValueKind == JsonValueKind.String ? message.GetString() : null;
+            }
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 }

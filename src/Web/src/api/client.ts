@@ -40,7 +40,9 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let detail = `Request failed (${response.status})`;
     try {
       const body = await response.json();
-      detail = body.detail ?? body.title ?? body.message ?? detail;
+      detail = body.code === 'kubernetes_forbidden'
+        ? `${body.title ?? 'Kubernetes permission denied'}: ${body.detail ?? 'The Kubernetes API server denied this operation.'}`
+        : body.detail ?? body.title ?? body.message ?? detail;
     } catch {
       /* response has no JSON body */
     }
