@@ -1,0 +1,68 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/example/kro-studio
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  automount: true
+
+service:
+  type: ClusterIP
+  port: 80
+
+auth:
+  mode: oidc
+  allowedHosts:
+    - kro-studio.example.com
+  trustedProxies: []
+  oidc:
+    authority: https://identity.example.com/realms/kro
+    clientId: kro-studio
+    redirectUri: ""
+    clientSecret:
+      secretName: ""
+      secretKey: clientSecret
+
+session:
+  lifetimeHours: 8
+
+readOnly: false
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: kro-studio.example.com
+  tls:
+    enabled: true
+    secretName: kro-studio-tls
+
+networkPolicy:
+  enabled: false
+  ingress:
+    namespaceSelector: {}
+    podSelector: {}
+  egress:
+    additionalRules: []
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

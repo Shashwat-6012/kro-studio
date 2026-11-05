@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["replicaCount", "image", "serviceAccount", "service", "auth", "session", "readOnly", "resources", "ingress", "networkPolicy"],
+  "properties": {
+    "replicaCount": { "type": "integer", "const": 1 },
+    "image": { "type": "object", "additionalProperties": false, "required": ["repository", "tag", "digest", "pullPolicy", "pullSecrets"], "properties": {
+      "repository": { "type": "string", "minLength": 1 }, "tag": { "type": "string" }, "digest": { "type": "string", "pattern": "^$|^sha256:[a-f0-9]{64}$" },
+      "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+      "pullSecrets": { "type": "array", "items": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "minLength": 1 } }, "additionalProperties": false } }
+    } },
+    "nameOverride": { "type": "string" }, "fullnameOverride": { "type": "string" },
+    "serviceAccount": { "type": "object", "additionalProperties": false, "required": ["create", "name", "automount"], "properties": { "create": { "type": "boolean" }, "name": { "type": "string" }, "automount": { "type": "boolean" } } },
+    "service": { "type": "object", "additionalProperties": false, "required": ["type", "port"], "properties": { "type": { "type": "string", "enum": ["ClusterIP"] }, "port": { "type": "integer", "minimum": 1, "maximum": 65535 } } },
+    "auth": { "type": "object", "additionalProperties": false, "required": ["mode", "allowedHosts", "trustedProxies", "oidc"], "properties": {
+      "mode": { "type": "string", "enum": ["oidc"] },
+      "allowedHosts": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1, "not": { "const": "*" } } },
+      "trustedProxies": { "type": "array", "items": { "type": "string", "anyOf": [{ "format": "ipv4" }, { "format": "ipv6" }] } },
+      "oidc": { "type": "object", "additionalProperties": false, "required": ["authority", "clientId", "redirectUri", "clientSecret"], "properties": {
+        "authority": { "type": "string", "format": "uri", "pattern": "^https://" }, "clientId": { "type": "string", "minLength": 1 },
+        "redirectUri": { "type": "string" }, "clientSecret": { "type": "object", "additionalProperties": false, "required": ["secretName", "secretKey"], "properties": { "secretName": { "type": "string" }, "secretKey": { "type": "string", "minLength": 1 } } }
+      } }
+    } },
+    "session": { "type": "object", "additionalProperties": false, "required": ["lifetimeHours"], "properties": { "lifetimeHours": { "type": "integer", "minimum": 1, "maximum": 24 } } },
+    "readOnly": { "type": "boolean" },
+    "resources": { "type": "object", "additionalProperties": false, "required": ["requests", "limits"], "properties": {
+      "requests": { "$ref": "#/definitions.resourceValues" }, "limits": { "$ref": "#/definitions.resourceValues" }
+    } },
+    "ingress": { "type": "object", "additionalProperties": false, "required": ["enabled", "className", "annotations", "host", "tls"], "properties": {
+      "enabled": { "type": "boolean" }, "className": { "type": "string" }, "annotations": { "type": "object", "additionalProperties": { "type": "string" } }, "host": { "type": "string", "minLength": 1 },
+      "tls": { "type": "object", "additionalProperties": false, "required": ["enabled", "secretName"], "properties": { "enabled": { "type": "boolean" }, "secretName": { "type": "string" } } }
+    } },
+    "networkPolicy": { "type": "object", "additionalProperties": false, "required": ["enabled", "ingress", "egress"], "properties": {
+      "enabled": { "type": "boolean" }, "ingress": { "type": "object", "required": ["namespaceSelector", "podSelector"], "properties": { "namespaceSelector": { "type": "object" }, "podSelector": { "type": "object" } } },
+      "egress": { "type": "object", "required": ["additionalRules"], "properties": { "additionalRules": { "type": "array", "items": { "type": "object" } } } }
+    } },
+    "podAnnotations": { "type": "object" }, "nodeSelector": { "type": "object" }, "tolerations": { "type": "array" }, "affinity": { "type": "object" }
+  },
+  "allOf": [
+    { "if": { "properties": { "image": { "required": ["digest"], "properties": { "digest": { "pattern": "^sha256:.+" } } } } }, "then": { "properties": { "image": { "properties": { "tag": { "const": "" } } } } } },
+    { "if": { "properties": { "ingress": { "properties": { "enabled": { "const": true }, "tls": { "properties": { "enabled": { "const": true } } } } } } }, "then": { "properties": { "ingress": { "properties": { "tls": { "properties": { "secretName": { "minLength": 1 } } } } } } } }
+  ],
+  "definitions": {
+    "resourceValues": { "type": "object", "additionalProperties": false, "required": ["cpu", "memory"], "properties": {
+      "cpu": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?m?$" },
+      "memory": { "type": "string", "pattern": "^[0-9]+(Ki|Mi|Gi|Ti|K|M|G|T)?$" }
+    } }
+  }
+}

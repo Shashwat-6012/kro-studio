@@ -1,0 +1,133 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kro-studio.fullname" . }}
+  labels:
+    {{- include "kro-studio.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kro-studio.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "kro-studio.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "kro-studio.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1654
+        runAsGroup: 1654
+        fsGroup: 1654
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: kro-studio
+          image: {{ .Values.image.repository }}{{- if .Values.image.digest }}@{{ .Values.image.digest }}{{- else }}:{{ .Values.image.tag | default .Chart.AppVersion }}{{- end }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: ASPNETCORE_URLS
+              value: http://+:8080
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            - name: HEALTHCHECK_HOST
+              value: {{ first .Values.auth.allowedHosts | quote }}
+            - name: AllowedHosts
+              value: {{ join ";" .Values.auth.allowedHosts | quote }}
+            - name: UserAuth__Mode
+              value: {{ .Values.auth.mode | quote }}
+            - name: UserAuth__Oidc__Authority
+              value: {{ .Values.auth.oidc.authority | quote }}
+            - name: UserAuth__Oidc__ClientId
+              value: {{ .Values.auth.oidc.clientId | quote }}
+            - name: UserAuth__Oidc__RedirectUri
+              value: {{ .Values.auth.oidc.redirectUri | quote }}
+            - name: Kubernetes__AuthMode
+              value: serviceAccount
+            - name: Kubernetes__InCluster
+              value: "true"
+            - name: ReadOnly
+              value: {{ .Values.readOnly | quote }}
+            - name: Session__LifetimeHours
+              value: {{ .Values.session.lifetimeHours | quote }}
+            {{- if .Values.auth.oidc.clientSecret.secretName }}
+            - name: UserAuth__Oidc__ClientSecret
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.oidc.clientSecret.secretName | quote }}
+                  key: {{ .Values.auth.oidc.clientSecret.secretKey | quote }}
+            {{- end }}
+            {{- range $index, $proxy := .Values.auth.trustedProxies }}
+            - name: ForwardedHeaders__KnownProxies__{{ $index }}
+              value: {{ $proxy | quote }}
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1654
+            runAsGroup: 1654
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: {{ first .Values.auth.allowedHosts | quote }}
+            periodSeconds: 5
+            failureThreshold: 24
+          livenessProbe:
+            exec:
+              command: ["dotnet", "KroStudio.Hub.dll", "--healthcheck"]
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: {{ first .Values.auth.allowedHosts | quote }}
+            periodSeconds: 10
+            timeoutSeconds: 7
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

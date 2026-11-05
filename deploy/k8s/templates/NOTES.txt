@@ -1,0 +1,13 @@
+KRO Studio is running in namespace {{ .Release.Namespace }}.
+
+The chart creates a ServiceAccount with no RoleBindings or ClusterRoleBindings.
+Grant only the Kubernetes permissions required by your selected deployment mode.
+The default serviceAccount mode uses that ServiceAccount identity for cluster API calls.
+
+Authentication is OIDC-only. Before exposing the service, configure auth.oidc.authority,
+auth.oidc.clientId, auth.allowedHosts, and the identity provider redirect URI as:
+  {{ .Values.auth.oidc.redirectUri | default (printf "https://%s/signin-oidc" .Values.ingress.host) }}
+
+If TLS terminates at a proxy, configure auth.trustedProxies with its IP addresses.
+For a private check, port-forward the Service and request /ready. The endpoint returns
+success only when the Hub can reach the Kubernetes API.
