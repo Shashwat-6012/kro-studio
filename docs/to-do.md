@@ -16,13 +16,13 @@ This list was reconciled against `design-document-modes-security-deployment.md` 
 
 ## Runtime and deployment
 
-- [ ] Add the Helm chart. Include a schema-validated values file, single-replica Deployment, ClusterIP Service, ServiceAccount without RoleBindings or ClusterRoleBindings, optional TLS Ingress, optional NetworkPolicy, and install notes.
-- [ ] Harden the charted pod: non-root, read-only root filesystem, all capabilities dropped, no privilege escalation, RuntimeDefault seccomp, and a writable `/tmp` volume. Keep the pod’s Kubernetes permissions empty unless a separately reviewed deployment mode needs them.
-- [ ] Add chart settings for authentication, trusted hosts/proxies, session lifetime, `readOnly`, resources, and optional networking. Ensure secure defaults and reject invalid combinations in the schema.
-- [ ] Implement `readOnly` as a server-side setting that rejects every mutating endpoint, regardless of UI visibility.
-- [ ] Finish runtime image hardening: move from the general ASP.NET runtime image to the chiseled image and pin build/runtime base images by digest where release reproducibility requires it. The current Docker image already runs as non-root and serves the UI and API from one process.
-- [ ] Add `/ready` for Kubernetes API readiness and a Hub `--healthcheck` mode; configure Kubernetes liveness/readiness probes. `/health` currently covers liveness only.
-- [ ] Add Helm lint/template validation and a clean-cluster install smoke test that checks `/ready`.
+- [x] Add the Helm chart. Include a schema-validated values file, single-replica Deployment, ClusterIP Service, ServiceAccount without RoleBindings or ClusterRoleBindings, optional TLS Ingress, optional NetworkPolicy, and install notes.
+- [x] Harden the charted pod: non-root, read-only root filesystem, all capabilities dropped, no privilege escalation, RuntimeDefault seccomp, and a writable `/tmp` volume. Keep the pod’s Kubernetes permissions empty unless a separately reviewed deployment mode needs them.
+- [x] Add chart settings for authentication, trusted hosts/proxies, session lifetime, `readOnly`, resources, and optional networking. Ensure secure defaults and reject invalid combinations in the schema.
+- [x] Implement `readOnly` as a server-side setting that rejects every mutating endpoint, regardless of UI visibility.
+- [x] Finish runtime image hardening: move from the general ASP.NET runtime image to the chiseled image and pin the Node, .NET build, and runtime base images by digest. The current Docker image already runs as non-root and serves the UI and API from one process.
+- [x] Add `/ready` for Kubernetes API readiness and a Hub `--healthcheck` mode; configure Kubernetes liveness/readiness probes. `/health` remains liveness-only.
+- [x] Add Helm lint/template validation and a fresh-kind-cluster install smoke test that checks `/ready`.
 
 ## Release and documentation
 
