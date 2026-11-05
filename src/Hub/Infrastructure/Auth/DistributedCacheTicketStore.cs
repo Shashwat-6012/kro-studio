@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.Extensions.Caching.Distributed;
+using System.Security.Cryptography;
 
 namespace KroStudio.Web.Infrastructure.Auth;
 
@@ -13,7 +14,8 @@ public sealed class DistributedCacheTicketStore(IDistributedCache cache) : ITick
     /// <inheritdoc />
     public async Task<string> StoreAsync(AuthenticationTicket ticket)
     {
-        string key = Guid.NewGuid().ToString("N");
+        // 32 random bytes provide the design's 256-bit opaque browser ticket key.
+        string key = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         await SaveAsync(key, ticket).ConfigureAwait(false);
         return key;
     }

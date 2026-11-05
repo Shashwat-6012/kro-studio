@@ -16,11 +16,19 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.HttpOverrides;
 using Scalar.AspNetCore;
 using System.Net;
+using System.Threading.RateLimiting;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 builder.Services.AddProblemDetails();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddAuthorization();
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("auth", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+});
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
@@ -44,6 +52,12 @@ string userAuthMode = builder.Configuration["UserAuth:Mode"] ?? "none";
 string kubernetesAuthMode = builder.Configuration["Kubernetes:AuthMode"] ?? "serviceAccount";
 if (!userAuthMode.Equals("none", StringComparison.OrdinalIgnoreCase) && !userAuthMode.Equals("oidc", StringComparison.OrdinalIgnoreCase))
     throw new InvalidOperationException("UserAuth:Mode must be 'none' or 'oidc'.");
+if (userAuthMode.Equals("none", StringComparison.OrdinalIgnoreCase) &&
+    (!builder.Environment.IsDevelopment() || HasNonLoopbackListener(builder.Configuration)))
+    throw new InvalidOperationException("UserAuth:Mode=none is restricted to local Development listeners. Configure OIDC for shared or release deployments.");
+string[] allowedHosts = (builder.Configuration["AllowedHosts"] ?? "").Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+if (!builder.Environment.IsDevelopment() && (allowedHosts.Length == 0 || allowedHosts.Any(host => host == "*")))
+    throw new InvalidOperationException("Shared and release deployments require an explicit AllowedHosts list without '*'.");
 if (!kubernetesAuthMode.Equals("impersonation", StringComparison.OrdinalIgnoreCase) && !kubernetesAuthMode.Equals("serviceAccount", StringComparison.OrdinalIgnoreCase))
     throw new InvalidOperationException("Kubernetes:AuthMode must be 'impersonation' or 'serviceAccount'.");
 if (kubernetesAuthMode.Equals("impersonation", StringComparison.OrdinalIgnoreCase) && !userAuthMode.Equals("oidc", StringComparison.OrdinalIgnoreCase))
@@ -66,9 +80,9 @@ if (userAuthMode.Equals("oidc", StringComparison.OrdinalIgnoreCase))
         options.Cookie.Name = "KroStudio.Session";
         options.Cookie.HttpOnly = true;
         options.Cookie.SecurePolicy = builder.Environment.IsDevelopment() ? CookieSecurePolicy.SameAsRequest : CookieSecurePolicy.Always;
-        options.Cookie.SameSite = SameSiteMode.Lax;
+        options.Cookie.SameSite = SameSiteMode.Strict;
         options.Cookie.IsEssential = true;
-        options.SlidingExpiration = true;
+        options.SlidingExpiration = false;
         options.ExpireTimeSpan = TimeSpan.FromHours(8);
         options.Events.OnRedirectToLogin = context =>
         {
@@ -140,19 +154,42 @@ if (app.Environment.IsDevelopment())
 
 app.UseExceptionHandler();
 app.UseForwardedHeaders();
+app.UseRouting();
+app.UseRateLimiter();
+app.Use(async (context, next) =>
+{
+    string host = context.Request.Host.Host;
+    bool hostAllowed = allowedHosts.Length > 0 && allowedHosts.Any(pattern =>
+        pattern == "*" || pattern.Equals(host, StringComparison.OrdinalIgnoreCase) ||
+        (pattern.StartsWith("*.", StringComparison.Ordinal) && host.EndsWith(pattern[1..], StringComparison.OrdinalIgnoreCase)));
+    if (!hostAllowed)
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+    context.Response.OnStarting(() =>
+    {
+        context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+        context.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+        context.Response.Headers["X-Frame-Options"] = "DENY";
+        context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+        return Task.CompletedTask;
+    });
+    await next().ConfigureAwait(false);
+});
 app.UseCors("Ui");
 if (userAuthMode.Equals("oidc", StringComparison.OrdinalIgnoreCase))
 {
     app.UseAuthentication();
     app.UseAuthorization();
-    app.MapGet("/auth/login", (string? returnUrl) => Results.Challenge(new Microsoft.AspNetCore.Authentication.AuthenticationProperties { RedirectUri = IsLocal(returnUrl) ? returnUrl : "/" }, [OpenIdConnectDefaults.AuthenticationScheme])).AllowAnonymous();
+    app.MapGet("/auth/login", (string? returnUrl) => Results.Challenge(new Microsoft.AspNetCore.Authentication.AuthenticationProperties { RedirectUri = IsLocal(returnUrl) ? returnUrl : "/" }, [OpenIdConnectDefaults.AuthenticationScheme])).AllowAnonymous().RequireRateLimiting("auth");
     app.MapPost("/auth/logout", async (HttpContext context) =>
     {
         AuthenticateResult authenticated = await context.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme).ConfigureAwait(false);
         Microsoft.AspNetCore.Authentication.AuthenticationProperties properties = authenticated.Properties ?? new();
         properties.RedirectUri = "/";
         return Results.SignOut(properties, [OpenIdConnectDefaults.AuthenticationScheme, CookieAuthenticationDefaults.AuthenticationScheme]);
-    }).RequireAuthorization();
+    }).RequireAuthorization().RequireRateLimiting("auth");
 }
 app.MapGet("/auth/session", (HttpContext context, IAntiforgery antiforgery) =>
 {
@@ -165,18 +202,25 @@ app.MapGet("/auth/session", (HttpContext context, IAntiforgery antiforgery) =>
         user = authenticated ? context.User.Identity?.Name : null,
         csrfToken = tokens.RequestToken
     });
-}).AllowAnonymous();
+}).AllowAnonymous().RequireRateLimiting("auth");
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-if (userAuthMode.Equals("oidc", StringComparison.OrdinalIgnoreCase))
-{
-    app.Use(async (context, next) =>
+app.Use(async (context, next) =>
     {
         bool protectedPath = context.Request.Path.StartsWithSegments("/api/v1") || context.Request.Path.Equals("/auth/logout", StringComparison.OrdinalIgnoreCase);
         bool unsafeMethod = !HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method) && !HttpMethods.IsOptions(context.Request.Method);
         if (protectedPath && unsafeMethod)
         {
+            string? origin = context.Request.Headers.Origin.FirstOrDefault();
+            if (!Uri.TryCreate(origin, UriKind.Absolute, out Uri? originUri) ||
+                !originUri.Scheme.Equals(context.Request.Scheme, StringComparison.OrdinalIgnoreCase) ||
+                !originUri.Authority.Equals(context.Request.Host.Value, StringComparison.OrdinalIgnoreCase))
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await context.Response.WriteAsJsonAsync(new { title = "The request origin is not allowed." }).ConfigureAwait(false);
+                return;
+            }
             try { await context.RequestServices.GetRequiredService<IAntiforgery>().ValidateRequestAsync(context).ConfigureAwait(false); }
             catch (AntiforgeryValidationException)
             {
@@ -186,8 +230,7 @@ if (userAuthMode.Equals("oidc", StringComparison.OrdinalIgnoreCase))
             }
         }
         await next().ConfigureAwait(false);
-    });
-}
+});
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" })).WithName("GetHealth").WithTags("Health");
 RouteGroupBuilder api = app.MapGroup("/api/v1");
@@ -203,6 +246,21 @@ app.MapMethods("/api/{**path}", ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"
 app.MapFallbackToFile("{*path:nonfile}", "index.html");
 
 static bool IsLocal(string? url) => !string.IsNullOrWhiteSpace(url) && url.StartsWith('/') && !url.StartsWith("//") && !url.StartsWith("/\\");
+
+static bool HasNonLoopbackListener(IConfiguration configuration)
+{
+    IEnumerable<string> addresses = (configuration["urls"] ?? "").Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+        .Concat(configuration.GetSection("Kestrel:Endpoints").GetChildren().Select(endpoint => endpoint["Url"] ?? ""))
+        .Where(address => !string.IsNullOrWhiteSpace(address));
+    foreach (string address in addresses)
+    {
+        if (!Uri.TryCreate(address, UriKind.Absolute, out Uri? uri)) return true;
+        string host = uri.Host;
+        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)) continue;
+        if (!IPAddress.TryParse(host, out IPAddress? ipAddress) || !IPAddress.IsLoopback(ipAddress)) return true;
+    }
+    return false;
+}
 
 app.Run();
 

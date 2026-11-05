@@ -15,6 +15,7 @@ public sealed class GeneratedApiResolver(KubernetesClientFactory clientFactory)
         using JsonDocument definition = JsonDocument.Parse(KubernetesJson.Serialize(rawDefinition));
         JsonElement schema = definition.RootElement.GetProperty("spec").GetProperty("schema");
         string kind = schema.GetProperty("kind").GetString() ?? throw new InvalidOperationException("The RGD does not declare a generated API kind.");
+        EnsureNotSecret(kind);
         string apiVersion = schema.GetProperty("apiVersion").GetString() ?? throw new InvalidOperationException("The RGD does not declare a generated API version.");
         string group = schema.TryGetProperty("group", out JsonElement groupValue) ? groupValue.GetString() ?? string.Empty : string.Empty;
         if (string.IsNullOrWhiteSpace(group) && apiVersion.Contains('/', StringComparison.Ordinal))
@@ -51,6 +52,7 @@ public sealed class GeneratedApiResolver(KubernetesClientFactory clientFactory)
     public async Task<GeneratedApiDescriptor> ResolveAsync(string apiId, CancellationToken cancellationToken)
     {
         GeneratedApiIdentity identity = Decode(apiId);
+        EnsureNotSecret(identity.Kind);
         Kubernetes client = clientFactory.GetClient();
         object rawResources = await client.CustomObjects.GetAPIResourcesAsync(identity.Group, identity.Version, cancellationToken).ConfigureAwait(false);
         using JsonDocument discovery = JsonDocument.Parse(KubernetesJson.Serialize(rawResources));
@@ -64,6 +66,12 @@ public sealed class GeneratedApiResolver(KubernetesClientFactory clientFactory)
         GeneratedApiDescriptor descriptor = new(apiId, identity.Group, identity.Version, identity.Plural, identity.Kind, identity.Namespaced, schemaDocument);
         await GetDefinitionForApiAsync(descriptor, cancellationToken).ConfigureAwait(false);
         return descriptor;
+    }
+
+    private static void EnsureNotSecret(string kind)
+    {
+        if (kind.Equals("Secret", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Kubernetes Secret resources are not exposed by the generated API.");
     }
 
     /// <summary>Finds the single RGD declaring a discovered generated kind and group.</summary>
