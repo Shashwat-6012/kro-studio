@@ -18,6 +18,21 @@ using Scalar.AspNetCore;
 using System.Net;
 using System.Threading.RateLimiting;
 
+if (args.Contains("--healthcheck", StringComparer.Ordinal))
+{
+    using HttpClient healthClient = new() { Timeout = TimeSpan.FromSeconds(3) };
+    try
+    {
+        string healthUrl = Environment.GetEnvironmentVariable("HEALTHCHECK_URL") ?? "http://127.0.0.1:8080/health";
+        healthClient.DefaultRequestHeaders.Host = Environment.GetEnvironmentVariable("HEALTHCHECK_HOST") ?? new Uri(healthUrl).Host;
+        using HttpResponseMessage healthResponse = await healthClient.GetAsync(healthUrl).ConfigureAwait(false);
+        return (int)healthResponse.StatusCode is >= 200 and < 300 ? 0 : 1;
+    }
+    catch (HttpRequestException) { return 1; }
+    catch (TaskCanceledException) { return 1; }
+    catch (UriFormatException) { return 1; }
+}
+
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 builder.Services.AddProblemDetails();
 builder.Services.AddHttpContextAccessor();
@@ -83,7 +98,9 @@ if (userAuthMode.Equals("oidc", StringComparison.OrdinalIgnoreCase))
         options.Cookie.SameSite = SameSiteMode.Strict;
         options.Cookie.IsEssential = true;
         options.SlidingExpiration = false;
-        options.ExpireTimeSpan = TimeSpan.FromHours(8);
+        int sessionHours = builder.Configuration.GetValue("Session:LifetimeHours", 8);
+        if (sessionHours is < 1 or > 24) throw new InvalidOperationException("Session:LifetimeHours must be between 1 and 24.");
+        options.ExpireTimeSpan = TimeSpan.FromHours(sessionHours);
         options.Events.OnRedirectToLogin = context =>
         {
             if (context.Request.Path.StartsWithSegments("/api")) { context.Response.StatusCode = StatusCodes.Status401Unauthorized; return Task.CompletedTask; }
@@ -208,6 +225,14 @@ app.UseStaticFiles();
 
 app.Use(async (context, next) =>
     {
+        if (builder.Configuration.GetValue<bool>("ReadOnly") &&
+            context.Request.Path.StartsWithSegments("/api") &&
+            !HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method) && !HttpMethods.IsOptions(context.Request.Method))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsJsonAsync(new { title = "This deployment is configured as read-only." }).ConfigureAwait(false);
+            return;
+        }
         bool protectedPath = context.Request.Path.StartsWithSegments("/api/v1") || context.Request.Path.Equals("/auth/logout", StringComparison.OrdinalIgnoreCase);
         bool unsafeMethod = !HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method) && !HttpMethods.IsOptions(context.Request.Method);
         if (protectedPath && unsafeMethod)
@@ -233,6 +258,13 @@ app.Use(async (context, next) =>
 });
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" })).WithName("GetHealth").WithTags("Health");
+app.MapGet("/ready", async (ClusterConnectionService connection, CancellationToken cancellationToken) =>
+{
+    ConnectionStatus status = await connection.GetConnectionAsync(cancellationToken).ConfigureAwait(false);
+    return status.Connected
+        ? Results.Ok(new { status = "ready" })
+        : Results.Json(new { status = "not_ready" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+}).WithName("GetReadiness").WithTags("Health");
 RouteGroupBuilder api = app.MapGroup("/api/v1");
 if (userAuthMode.Equals("oidc", StringComparison.OrdinalIgnoreCase)) api.RequireAuthorization();
 api.MapConnectionEndpoints();
@@ -263,6 +295,7 @@ static bool HasNonLoopbackListener(IConfiguration configuration)
 }
 
 app.Run();
+return 0;
 
 /// <summary>Provides the application entry point for integration hosting.</summary>
 public partial class Program;
