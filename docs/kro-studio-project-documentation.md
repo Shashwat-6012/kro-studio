@@ -1,5 +1,7 @@
 # KRO Studio
 
+> **Historical planning document.** This specification predates the current implementation and contains proposals that have since changed. Use the [README](../README.md) and [roadmap](roadmap.md) for current capabilities and priorities, [architecture and design](architecture-and-design.md) for the implemented system, and [authentication and RBAC](authentication-and-rbac.md) for current identity behavior. Do not treat unchecked acceptance criteria below as a complete or current product status.
+
 ## Product Requirements, Architecture, and Implementation Blueprint
 
 **Document status:** Initial product specification\

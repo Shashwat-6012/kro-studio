@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="390" viewBox="0 0 1400 390" role="img" aria-labelledby="title desc">
+  <title id="title">KRO Studio workflow</title>
+  <desc id="desc">Create and validate a ResourceGraphDefinition, create an instance, and explore its composed resources.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#111827"/><stop offset="1" stop-color="#202b42"/></linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#9b8cff"/><stop offset="1" stop-color="#6d56d9"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#080b12" flood-opacity=".3"/></filter>
+  </defs>
+  <rect width="1400" height="390" rx="28" fill="url(#bg)"/>
+  <circle cx="1260" cy="30" r="170" fill="#7260d8" opacity=".12"/>
+  <circle cx="80" cy="370" r="170" fill="#42c3a6" opacity=".08"/>
+  <text x="70" y="78" fill="#a99aff" font-family="Segoe UI,Arial,sans-serif" font-size="16" font-weight="700" letter-spacing="2">KRO STUDIO · FROM DEFINITION TO RUNNING RESOURCES</text>
+  <text x="70" y="128" fill="#fff" font-family="Segoe UI,Arial,sans-serif" font-size="32" font-weight="700">A clearer way to work with KRO</text>
+  <g filter="url(#shadow)">
+    <rect x="70" y="174" width="355" height="160" rx="16" fill="#fff"/>
+    <rect x="452" y="174" width="355" height="160" rx="16" fill="#fff"/>
+    <rect x="834" y="174" width="496" height="160" rx="16" fill="#fff"/>
+  </g>
+  <g font-family="Segoe UI,Arial,sans-serif">
+    <circle cx="108" cy="215" r="18" fill="url(#accent)"/><text x="108" y="221" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">1</text>
+    <text x="140" y="220" fill="#22233a" font-size="18" font-weight="700">Define &amp; validate</text>
+    <text x="96" y="261" fill="#707185" font-size="14">Author an RGD; dry-run it with</text><text x="96" y="283" fill="#707185" font-size="14">the Kubernetes API before saving.</text>
+    <rect x="96" y="301" width="112" height="20" rx="10" fill="#eeeaff"/><text x="152" y="315" text-anchor="middle" fill="#6650c7" font-size="11" font-weight="700">RGD · VALID</text>
+    <circle cx="490" cy="215" r="18" fill="url(#accent)"/><text x="490" y="221" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">2</text>
+    <text x="522" y="220" fill="#22233a" font-size="18" font-weight="700">Create an instance</text>
+    <text x="478" y="261" fill="#707185" font-size="14">Use the generated API to create</text><text x="478" y="283" fill="#707185" font-size="14">a reusable, schema-based resource.</text>
+    <rect x="478" y="301" width="135" height="20" rx="10" fill="#e9f8f4"/><text x="545" y="315" text-anchor="middle" fill="#228b73" font-size="11" font-weight="700">DEMOAPP INSTANCE</text>
+    <circle cx="872" cy="215" r="18" fill="url(#accent)"/><text x="872" y="221" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">3</text>
+    <text x="904" y="220" fill="#22233a" font-size="18" font-weight="700">Explore the resource graph</text>
+    <text x="860" y="261" fill="#707185" font-size="14">Follow KRO-managed resources and inspect their status.</text>
+    <rect x="864" y="289" width="108" height="28" rx="9" fill="#f4f1ff" stroke="#e2dcff"/><text x="918" y="307" text-anchor="middle" fill="#5546a7" font-size="11" font-weight="700">INSTANCE</text>
+    <rect x="1088" y="279" width="98" height="28" rx="9" fill="#effaf7" stroke="#d6f0e9"/><text x="1137" y="297" text-anchor="middle" fill="#27866f" font-size="11" font-weight="700">DEPLOYMENT</text>
+    <rect x="1210" y="309" width="82" height="24" rx="8" fill="#edf4ff" stroke="#dbe8ff"/><text x="1251" y="325" text-anchor="middle" fill="#4265a5" font-size="10" font-weight="700">SERVICE</text>
+  </g>
+  <path d="M972 303 C1020 303 1035 293 1088 293" fill="none" stroke="#8877eb" stroke-width="2.5"/>
+  <path d="M1186 293 C1202 293 1204 321 1210 321" fill="none" stroke="#42b69c" stroke-width="2.5"/>
+  <path d="M425 254h27m-8-8 8 8-8 8M807 254h27m-8-8 8 8-8 8" fill="none" stroke="#aaa0f4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

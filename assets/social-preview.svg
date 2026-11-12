@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">KRO Studio</title>
+  <desc id="desc">A focused UI for authoring KRO ResourceGraphDefinitions, managing instances, and exploring composed Kubernetes resources.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101626"/><stop offset="1" stop-color="#253451"/></linearGradient>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ad9dff"/><stop offset="1" stop-color="#735bd8"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%"><feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#080b12" flood-opacity=".35"/></filter>
+  </defs>
+  <rect width="1280" height="640" rx="0" fill="url(#bg)"/>
+  <circle cx="1180" cy="20" r="300" fill="#7969df" opacity=".13"/>
+  <circle cx="80" cy="630" r="250" fill="#42c3a6" opacity=".08"/>
+  <g font-family="Segoe UI,Arial,sans-serif">
+    <rect x="76" y="82" width="58" height="58" rx="17" fill="url(#brand)"/>
+    <path d="M93 112h24m-12-12v24" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
+    <text x="154" y="124" fill="#fff" font-size="38" font-weight="700">KRO Studio</text>
+    <text x="78" y="224" fill="#fff" font-size="47" font-weight="700">KRO workflows,</text>
+    <text x="78" y="281" fill="#c8c0ff" font-size="47" font-weight="700">made visual.</text>
+    <text x="80" y="340" fill="#c5ccda" font-size="21">Author ResourceGraphDefinitions. Manage instances.</text>
+    <text x="80" y="372" fill="#c5ccda" font-size="21">Explore every composed resource.</text>
+    <rect x="80" y="426" width="168" height="38" rx="19" fill="#ffffff" opacity=".12"/><text x="164" y="451" text-anchor="middle" fill="#e6e1ff" font-size="14" font-weight="700">OPEN SOURCE</text>
+    <rect x="890" y="72" width="318" height="500" rx="22" fill="#fff" filter="url(#shadow)"/>
+    <rect x="890" y="72" width="318" height="54" rx="22" fill="#fbfbfd"/><path d="M890 104v22h318v-22" fill="#fbfbfd"/>
+    <circle cx="916" cy="99" r="5" fill="#ff8c82"/><circle cx="934" cy="99" r="5" fill="#f2c45e"/><circle cx="952" cy="99" r="5" fill="#61c8a5"/>
+    <rect x="910" y="151" width="278" height="65" rx="12" fill="#f6f4ff" stroke="#e5e0ff"/>
+    <circle cx="934" cy="176" r="7" fill="#725bd8"/><text x="952" y="181" fill="#31304a" font-size="13" font-weight="700">DemoApp instance</text><text x="928" y="201" fill="#77778a" font-size="11">sample-demo · default</text>
+    <path d="M1049 216v29m-74 0h148m-148 0v23m148-23v23" fill="none" stroke="#aa9ff0" stroke-width="2"/>
+    <rect x="909" y="268" width="124" height="57" rx="11" fill="#edf9f6" stroke="#d7f0e9"/><text x="971" y="291" text-anchor="middle" fill="#23836d" font-size="12" font-weight="700">Deployment</text><text x="971" y="310" text-anchor="middle" fill="#778b87" font-size="10">Ready · 1/1</text>
+    <rect x="1059" y="268" width="129" height="57" rx="11" fill="#edf4ff" stroke="#dce8fc"/><text x="1123" y="291" text-anchor="middle" fill="#4967a0" font-size="12" font-weight="700">Service</text><text x="1123" y="310" text-anchor="middle" fill="#78859c" font-size="10">ClusterIP</text>
+    <rect x="909" y="351" width="279" height="196" rx="13" fill="#fafafd" stroke="#ececf2"/>
+    <text x="929" y="380" fill="#34344d" font-size="13" font-weight="700">Composed resources</text>
+    <rect x="929" y="398" width="239" height="38" rx="9" fill="#fff" stroke="#e9e8ef"/><circle cx="947" cy="417" r="5" fill="#43b99d"/><text x="961" y="421" fill="#49495d" font-size="11">Deployment / sample-demo</text>
+    <rect x="929" y="445" width="239" height="38" rx="9" fill="#fff" stroke="#e9e8ef"/><circle cx="947" cy="464" r="5" fill="#43b99d"/><text x="961" y="468" fill="#49495d" font-size="11">Service / sample-demo</text>
+    <text x="929" y="520" fill="#88889a" font-size="10">Status and events in one focused view</text>
+    <text x="80" y="574" fill="#9da8bb" font-size="14">A focused Kubernetes UI for Kube Resource Orchestrator</text>
+  </g>
+</svg>

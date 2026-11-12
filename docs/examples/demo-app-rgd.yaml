@@ -1,0 +1,53 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: demo-app
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: DemoApp
+    spec:
+      name: string | required=true
+      image: string | default="nginx:1.27"
+      replicas: integer | default=1 minimum=1
+    status:
+      availableReplicas: ${deployment.status.availableReplicas}
+  resources:
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.metadata.namespace}
+        spec:
+          replicas: ${schema.spec.replicas}
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: ${schema.spec.name}
+          template:
+            metadata:
+              labels:
+                app.kubernetes.io/name: ${schema.spec.name}
+            spec:
+              containers:
+                - name: app
+                  image: ${schema.spec.image}
+                  ports:
+                    - name: http
+                      containerPort: 80
+                      protocol: TCP
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.metadata.namespace}
+        spec:
+          selector:
+            app.kubernetes.io/name: ${schema.spec.name}
+          ports:
+            - name: http
+              port: 80
+              targetPort: http

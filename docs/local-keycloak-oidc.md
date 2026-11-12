@@ -1,5 +1,7 @@
 # Local OIDC / Keycloak test setup
 
+> This guide exercises optional local OIDC development. The standard quickstart uses login-free Development mode on loopback; shared or release deployments require OIDC.
+
 This guide exercises the Hub's OIDC sign-in, server-side session cookie, React sign-in screen, CSRF-protected API calls, and sign-out using a local Keycloak instance. It uses development-only credentials and HTTP. The Hub permits HTTP OIDC metadata only in the Development environment; other environments require HTTPS. Do not reuse these settings outside a local machine.
 
 ## 1. Start Keycloak
