@@ -1,28 +1,41 @@
-# KRO Studio UI — modular rewrite
+# KRO Studio web UI
 
-## Wire-up
-1. Delete `src/ui/` (old App.tsx + styles.css). Replace `src/main.tsx` with the one here.
-2. Copy `src/{app,api,components,features,hooks,lib,styles}` into your `src/`.
-3. Merge the dependencies from `package.json` and run `npm install`:
-   `@tanstack/react-query @xyflow/react @dagrejs/dagre react-router-dom yaml`
-4. SPA fallback: the server that hosts the built UI must return `index.html` for unknown paths
-   (Vite dev does this already; for .NET use `MapFallbackToFile("index.html")`).
+React, TypeScript, and Vite frontend for the KRO Studio Hub. The app calls the Hub's same-origin `/api/v1` routes; Kubernetes credentials stay on the backend.
 
-## Layers
-- `api/types.ts`      contracts for every /api/v1 payload
-- `api/client.ts`     fetch wrapper, ApiError, query-string helper
-- `api/endpoints.ts`  one function per endpoint (clusterApi, definitionsApi, instancesApi, rbacApi)
-- `api/hooks.ts`      React Query hooks + mutations (toasts live here)
-- `lib/`              pure helpers: status → tone (`status.ts`), k8s accessors (`k8s.ts`), yaml, templates
-- `components/`       reusable UI (DataTable, Modal, Tabs, StatusBadge, CodePanel, ManifestEditorDialog…)
-- `features/*`        one folder per page; instance graph is in `features/instances/graph`
-- `styles/`           tokens.css (theme) → base → layout → components → features/*
+## Run locally
 
-## Where to change things
-- Status colours / how a state like "Inactive" is shown: `lib/status.ts`
-- Instance + composed-resource health rules: `lib/k8s.ts` (`instanceStatus`, `resourceStatus`)
-- Graph layout/topology: `features/instances/graph/{model,layout}.ts`
+From the repository root, start the Hub in one terminal:
 
-## Backend note
-`GET /api/v1/rgds/{name}/instances/{instance}?namespace=` is recommended for deep links.
-Until it exists the UI falls back to scanning the first 5 list pages.
+```sh
+dotnet run --project src/Hub --launch-profile http
+```
+
+In another terminal:
+
+```sh
+cd src/Web
+npm ci
+npm run dev
+```
+
+Vite binds to loopback (normally <http://localhost:5173>) and forwards `/api`, `/auth`, and OIDC callback routes to the Hub at `http://127.0.0.1:8080`. The Hub's `http` launch profile enables login-free Development mode on loopback. For a Kubernetes-backed session, configure `KUBECONFIG` to a disposable cluster first.
+
+## Build
+
+```sh
+npm run build
+```
+
+The Docker build runs this build and copies the generated `dist` files into the Hub's `wwwroot`; a deployed container serves UI and API from one process.
+
+## Structure
+
+- `src/app`: application layout, navigation, auth and namespace providers, and routes.
+- `src/api`: API contracts, request client, endpoint functions, query hooks, and query keys.
+- `src/features`: pages grouped by overview, RGDs, generated APIs, instances, cluster status, and RBAC.
+- `src/features/instances/graph`: model, layout, React Flow graph, resource nodes, and inspector.
+- `src/components`: shared tables, editors, dialogs, status badges, and controls.
+- `src/lib`: Kubernetes object helpers, YAML conversion, status mapping, formatting, and local preferences.
+- `src/styles`: tokens, shared layout/components, and feature styles.
+
+Keep Kubernetes authorization and validation on the server. The UI may hide unavailable operations for clarity, but it must not be treated as a security boundary. See the [architecture guide](../../docs/architecture-and-design.md) and [contribution guide](../../CONTRIBUTING.md).

@@ -2,6 +2,8 @@
 
 This list was reconciled against `design-document-modes-security-deployment.md` and the current Hub, UI, and deployment files on 2026-11-11. The old Helm-only, pasted-token plan is superseded; current code supports OIDC and Kubernetes impersonation, plus local kubeconfig use. Items below are work that remains or needs an explicit security verification.
 
+For the user-facing priorities, see the [project roadmap](roadmap.md). This checklist retains detailed implementation and security follow-up items.
+
 ## Security and authentication
 
 - [x] Make the authentication mode explicit and fail closed for shared or release deployments. `UserAuth:Mode=none` must be limited to local single-user use; a deployment must not silently start unauthenticated when auth configuration is absent.

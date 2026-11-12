@@ -1,74 +1,125 @@
 # KRO Studio
 
-KRO Studio is a local-first workspace for managing KRO ResourceGraphDefinitions and their generated custom resource APIs. The ASP.NET Core Hub and React/Vite UI run as separate projects during development; the release image builds the UI into the Hub so one process serves the app and API.
+**Design KRO ResourceGraphDefinitions, manage their instances, and see every composed resource in one focused Kubernetes UI.**
 
-## Projects
+KRO Studio is an open-source web workspace for [KRO](https://kro.run/). Validate and manage ResourceGraphDefinitions (RGDs), work with the APIs KRO generates, and follow an instance through its composed resources—all through your browser.
 
-- `src/Web`: React, TypeScript, and Vite UI.
-- `src/Hub`: .NET 10 Minimal API and Kubernetes client integration.
-- `deploy/docker`: single-image UI and API container packaging.
-- `docs`: product requirements, architecture, and authentication/RBAC design.
+> **Project status:** Early-stage, self-hosted project with limited automated test coverage. Start with the local demo below and review the [known limitations and roadmap](docs/roadmap.md) before using it on important clusters.
 
-Backend code uses capability-based feature folders. Each feature owns its routes, request validation, and application service; Kubernetes client creation and API error mapping live in shared infrastructure. Nullable reference types and warnings-as-errors are enabled.
+![KRO Studio workflow: RGD, instance, and composed resources](docs/assets/workflow.svg)
 
-## Run locally
+## Try the local demo
 
-Prerequisites: .NET 10 SDK, Node.js 24, and npm.
+The demo uses a disposable [kind](https://kind.sigs.k8s.io/) cluster and the current Kubernetes context. It installs KRO 0.9.4, applies a sample RGD and instance, and leaves the cluster available for exploration. KRO Studio runs locally in login-free Development mode and talks to the cluster through your kubeconfig.
 
-Run the API and UI as separate processes:
+You need Docker, kind, kubectl, .NET 10 SDK, Node.js 24, and npm. From the repository root:
 
-1. From the repository root, start the API with `dotnet run --project src/Hub --launch-profile http`. It listens at `http://localhost:5244`.
-2. In another terminal, start the UI with `cd src/Web`, then `npm run dev`.
-3. Open the Vite URL printed in the UI terminal (normally `http://localhost:5173`).
-
-The API exposes its versioned routes under `/api/v1`, a liveness endpoint at `/health`, and Kubernetes-backed readiness at `/ready`. In local development, Vite serves the UI and forwards `/api` requests to the API. The Docker image builds the UI into the Hub's `wwwroot`, where the Hub serves static assets and the SPA fallback. If a separately hosted UI calls the API directly, add its origin to `Cors:AllowedOrigins` in API configuration.
-
-Both processes can start without a cluster. The API reports a disconnected state until Kubernetes is reachable. Set `KUBECONFIG` and optionally `KUBECONTEXT` before starting the API, or set `Kubernetes:KubeconfigPath` and `Kubernetes:Context` in configuration. Credentials remain on the backend.
-
-When a cluster is connected but KRO's `ResourceGraphDefinition` API is missing, the Studio shows an installation banner. Confirming installation applies the official KRO release manifest (default version `0.9.4`) to the connected cluster using the API's Kubernetes identity. The identity needs permission to create cluster-scoped resources, including CRDs and RBAC roles. Change `Kubernetes:KroVersion` to select a different stable KRO release.
-
-## Backend API
-
-- `GET /api/v1/connection` and `/api/v1/capabilities` report cluster and KRO discovery state. `GET /api/v1/kro-installation` reports the configured install version; `POST /api/v1/kro-installation` installs the pinned official KRO raw release manifest when KRO is not already detected.
-- `POST /api/v1/kro-controller/restart` requests a rolling restart of the `kro-system/kro` controller deployment.
-- `/api/v1/rgds` supports list, read, YAML/JSON dry-run validation, create, update, delete, and `POST /api/v1/rgds/{name}/retry` to request another reconciliation.
-- `/api/v1/rgds/{name}/api` resolves a definition to its served generated API through Kubernetes discovery.
-- `/api/v1/rgds/{name}/instances` and `/api/v1/apis/{apiId}/instances` support paged list, read, create, update, and delete. Instance conditions/status are returned with the Kubernetes object; `/{instanceName}/events` reads related events.
-- `/{instanceName}/resources` inspects only resource kinds declared by the RGD and matches KRO's `kro.run/instance-id` ownership label. Secret objects are skipped; forbidden or undiscovered types are reported as partial results.
-- Kubernetes authentication, authorization, validation, conflict, timeout, and availability errors are returned as Problem Details responses.
-
-Validation uses Kubernetes server-side dry-run and does not persist the RGD. KRO acceptance is reported later through the stored RGD conditions. Dynamic API discovery does not enable instance operations until the resource is present in API discovery.
-
-## Deploy with Helm
-
-Shared and release deployments require OIDC. The chart uses a single pod with the Kubernetes ServiceAccount as its cluster identity; the chart intentionally creates no RoleBindings. Before exposing it, configure an OIDC provider, TLS, the allowed hostname, trusted proxy addresses where applicable, and only the Kubernetes permissions the intended workflows need. The [Helm deployment guide](deploy/k8s/README.md) has the full setup. The [authentication and RBAC guide](docs/authentication-and-rbac.md) explains the identity choices and permissions.
-
-The chart and image are published by pushing a version tag such as `v0.1.0-rc1`. The [release workflow](.github/workflows/release.yml) builds both supported image architectures, publishes the OCI chart, installs it on a fresh kind cluster, checks `/ready`, and creates a GitHub Release with generated notes and artifact checksums after the smoke install passes.
-
-## Continuous integration
-
-The [Build and chart validation workflow](.github/workflows/ci.yml) runs on every pull request and branch push, including merge commits. It restores, builds, and tests the .NET solution; lints, renders, and packages the Helm chart; then builds the Docker image and installs the chart on a fresh kind cluster to check `/ready`. The release workflow calls these same checks before it publishes any image or chart. The repository currently has no dedicated .NET test project, so `dotnet test` runs successfully but does not yet execute test cases.
-
-## Run the UI and API in Docker
-
-Compose builds one image containing the React UI and ASP.NET Core Hub. The Hub serves the UI from `wwwroot`, provides the SPA fallback, and handles `/api` requests on the same origin. The Hub reads the mounted kubeconfig.
-
-```powershell
-$env:KUBECONFIG_PATH = "$HOME\.kube\config"
-docker compose -f deploy/docker/docker-compose.yml up --build
+```sh
+bash scripts/demo-kind.sh
 ```
 
-Open `http://127.0.0.1:8080` to use the UI. The UI and `/api/v1` endpoints share that origin; `/health` checks liveness and `/ready` checks Kubernetes API readiness. Set `UI_PORT` to change the host port and `KUBECONTEXT` to select a kubeconfig context. Compose publishes one port for the combined Hub and UI. Keep this local workflow private; cluster operations use the configured kubeconfig identity. For shared access, use the OIDC-protected Helm deployment.
+On Windows PowerShell:
 
-## Current backend capabilities
+```powershell
+.\scripts\demo-kind.ps1
+```
 
-- Cluster connectivity and Kubernetes version reporting.
-- KRO ResourceGraphDefinition API discovery and catalog/manifest reads.
-- RGD dry-run validation and cluster-scoped create, update, and delete.
-- Manual KRO controller restart and per-RGD reconciliation retry.
-- Generated API resolution by declared group/kind and Kubernetes API discovery, including scope and OpenAPI schema.
-- Dynamic custom resource list, read, create, update, delete, and related Kubernetes event retrieval.
-- Read-only composed-resource inspection using KRO ownership labels and RGD-declared API types.
-- Stable Problem Details mapping for expected Kubernetes failures.
+Then start the Hub and UI in two terminals:
 
-Composed-resource inspection is limited to data that can be associated reliably. It does not scan undeclared resource types or return Secret payloads. Cross-namespace template expressions that cannot be resolved from the instance or manifest may appear as incomplete inspection.
+```sh
+dotnet run --project src/Hub --launch-profile http
+```
+
+```sh
+cd src/Web && npm ci && npm run dev
+```
+
+Open the Vite URL (normally <http://localhost:5173>). The sample `DemoApp` RGD and instance are ready to inspect. Create another RGD from **Resource graphs**, validate it with the Kubernetes API dry-run, save it, then create an instance and open its **Resource graph** tab.
+
+The login-free mode is restricted to loopback Development listeners. Keep the demo cluster disposable: the local kubeconfig identity can perform any action it is authorized to perform. Clean up with `kind delete cluster --name kro-studio-demo`.
+
+### Install on a shared cluster
+
+Shared deployments use OIDC. Prepare `values-production.yaml` with the published image, identity provider, allowed hostname, and TLS ingress settings, and create the OIDC client-secret Kubernetes Secret as described in the [Helm deployment guide](deploy/k8s/README.md). Then install the OCI chart:
+
+```sh
+helm upgrade --install kro-studio oci://ghcr.io/OWNER/charts/kro-studio \
+  --version VERSION --namespace kro-studio --create-namespace \
+  --values values-production.yaml
+```
+
+Replace `OWNER` and `VERSION` with the published repository owner and release. Keep the local kind walkthrough above for a fast login-free demo.
+
+## What you can do
+
+- **Author RGDs:** create, inspect, update, and delete cluster-scoped ResourceGraphDefinitions.
+- **Validate before saving:** ask the Kubernetes API server to dry-run an RGD create or update. This does not save the object and does not replace KRO's later reconciliation status.
+- **Manage generated APIs and instances:** discover a generated API from an RGD; list, create, inspect, update, and delete its instances; view conditions and related events.
+- **Explore composed resources:** inspect resources declared by the RGD and associated with an instance. The graph skips Secret objects and may show partial results when permissions or discovery are incomplete.
+- **Retry KRO work:** request another reconciliation for an RGD or request a rolling restart of the KRO controller deployment.
+- **Manage Kubernetes RBAC:** inspect and edit Roles, ClusterRoles, RoleBindings, and ClusterRoleBindings, subject to the active Kubernetes identity's permissions.
+- **Deploy with identity controls:** use local kubeconfig access for local development, or OIDC for shared deployments. Optional Kubernetes impersonation is available when the deployment is configured for it.
+
+KRO Studio is a Kubernetes client, not a replacement for the KRO controller. Kubernetes remains the source of truth and KRO reconciles the resources.
+
+## KRO Studio and other tools
+
+| | KRO Studio | `kubectl` | Headlamp / Lens / Rancher |
+|---|---|---|---|
+| Main focus | KRO RGDs and their generated instances | General Kubernetes CLI workflows | General Kubernetes cluster visibility and administration |
+| Interface | Browser UI focused on the RGD → instance → composed-resource path | Commands, manifests, and scripts | General-purpose dashboards; capabilities vary by product, version, and extensions |
+| Best fit | People who want a focused visual workflow for KRO | Automation, scripting, precise API control, and users who prefer the CLI | Broad cluster operations across many Kubernetes resource types |
+| Trade-off | Early-stage project with a narrower scope and fewer integrations | Requires Kubernetes and KRO command-line familiarity | Availability of KRO-specific authoring and instance workflows depends on each product's integrations and extensions |
+
+These tools serve different jobs and can be used together. KRO Studio does not aim to replace `kubectl` or become a general-purpose dashboard. See the projects' own documentation: [Headlamp](https://headlamp.dev/), [Lens](https://k8slens.dev/), and [Rancher](https://www.rancher.com/).
+
+## Deployment and security
+
+- **Local:** kubeconfig-backed Development mode, restricted to a loopback listener.
+- **Shared:** the Helm chart requires OIDC and an explicit hostname allow-list. It creates a ServiceAccount but intentionally grants it no Kubernetes Roles or bindings; configure only the permissions the chosen workflows need.
+- **Identity:** shared Helm mode uses the pod's Kubernetes identity by default. Optional impersonation requires an appropriately trusted OIDC claim mapping and Kubernetes permission to impersonate.
+- **Hardening:** the chart uses a single replica, non-root execution, a read-only root filesystem, dropped Linux capabilities, and optional ingress and NetworkPolicy resources.
+
+Read the [authentication and RBAC guide](docs/authentication-and-rbac.md) and [deployment/security design](docs/design-document-modes-security-deployment.md) before exposing a shared installation.
+
+## Contributing and project direction
+
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md), the [roadmap](docs/roadmap.md), and the published [good first issues](docs/good-first-issues.md). Report vulnerabilities privately using the process in [SECURITY.md](SECURITY.md).
+
+### Roadmap
+
+1. **Make the first workflow dependable:** validate the local quickstart, strengthen end-to-end coverage, and clarify KRO readiness and permission errors.
+2. **Improve safe operations:** show instance reconciliation outcomes more clearly and evaluate write previews and RGD deletion impact checks.
+3. **Prepare trustworthy releases:** complete security verification, publish signed artifacts and an SBOM, and document supported KRO/Kubernetes versions.
+4. **Grow with users:** improve onboarding and accessibility based on feedback, then prioritize integrations requested by KRO users.
+
+This is a direction, not a release commitment. The tracked items and current status live in the [roadmap](docs/roadmap.md).
+
+## Development
+
+The app consists of a React/TypeScript/Vite frontend (`src/Web`) and an ASP.NET Core .NET 10 Hub (`src/Hub`). In development, Vite forwards `/api` requests to the Hub. The single-image Docker build serves the UI and API from the Hub.
+
+```sh
+dotnet run --project src/Hub --launch-profile http
+```
+
+In a second terminal:
+
+```sh
+cd src/Web
+npm ci
+npm run dev
+```
+
+The project has GitHub Actions CI for build, chart validation, container build, and a kind install smoke check. See [architecture and design](docs/architecture-and-design.md) for implementation details and [local OIDC with Keycloak](docs/local-keycloak-oidc.md) for auth development.
+
+## Repository
+
+- [Helm chart and deployment guide](deploy/k8s/README.md)
+- [Architecture](docs/architecture-and-design.md)
+- [Authentication and RBAC](docs/authentication-and-rbac.md)
+- [Roadmap and known limitations](docs/roadmap.md)
+- [Demo media capture guide](docs/demo-media.md)
+- [Repository launch checklist](docs/repository-launch-checklist.md)
+- [Contributing](CONTRIBUTING.md)
+- [License](LICENSE)

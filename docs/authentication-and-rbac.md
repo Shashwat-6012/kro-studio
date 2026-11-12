@@ -12,7 +12,7 @@ KRO Studio supports local kubeconfig use and OIDC-authenticated deployments. The
 
 | Concern | Local development | Shared deployment |
 | --- | --- | --- |
-| Person to KRO Studio | OIDC authorization-code sign-in with an opaque cookie backed by a server-side authentication ticket; `none` is restricted to local Development listeners | OIDC provider configured by `UserAuth:Oidc:*` |
+| Person to KRO Studio | Login-free `UserAuth:Mode=none` is allowed only on local Development listeners; local OIDC can also be used for auth development | OIDC provider configured by `UserAuth:Oidc:*` |
 | KRO Studio backend to Kubernetes | `Kubernetes:AuthMode=serviceAccount` uses the runtime kubeconfig locally or the pod's service account with in-cluster configuration | `Kubernetes:AuthMode=impersonation` uses a kubeconfig base identity and forwards verified OIDC username/group claims as Kubernetes impersonation headers |
 | Kubernetes authorization | Kubernetes RBAC is authoritative; no permission is inferred from hidden UI controls | Still authoritative; application identity-to-cluster identity mapping must be designed before team access |
 | Credential delivery | Runtime file/configuration to backend only; never image, repository, or browser bundle | Secret and identity lifecycle must be owned by the deployment platform |

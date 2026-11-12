@@ -6,8 +6,15 @@ services:
     ports:
       - "127.0.0.1:${UI_PORT:-8080}:8080"
     environment:
+      ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_URLS: http://+:8080
+      AllowedHosts: ${ALLOWED_HOST:?Set ALLOWED_HOST to the browser-facing hostname}
+      ForwardedHeaders__KnownProxies__0: ${TRUSTED_PROXY_IP:?Set TRUSTED_PROXY_IP to the trusted TLS proxy address}
+      UserAuth__Mode: oidc
+      UserAuth__Oidc__Authority: ${OIDC_AUTHORITY:?Set OIDC_AUTHORITY}
+      UserAuth__Oidc__ClientId: ${OIDC_CLIENT_ID:?Set OIDC_CLIENT_ID}
+      UserAuth__Oidc__ClientSecret: ${OIDC_CLIENT_SECRET:?Set OIDC_CLIENT_SECRET}
       Kubernetes__KubeconfigPath: /run/kubeconfig
-      Kubernetes__Context: ${KUBECONTEXT:-docker-desktop}
+      Kubernetes__Context: ${KUBECONTEXT:-}
     volumes:
       - ${KUBECONFIG_PATH:?Set KUBECONFIG_PATH to your kubeconfig path}:/run/kubeconfig:ro

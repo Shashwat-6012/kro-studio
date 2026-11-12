@@ -1,0 +1,9 @@
+apiVersion: kro.run/v1alpha1
+kind: DemoApp
+metadata:
+  name: sample-demo
+  namespace: default
+spec:
+  name: sample-demo
+  image: nginx:1.27
+  replicas: 1
