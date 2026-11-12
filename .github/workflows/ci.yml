@@ -1,0 +1,74 @@
+name: Build and chart validation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet:
+    name: .NET build and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore
+        run: dotnet restore KroStudio.sln
+      - name: Build
+        run: dotnet build KroStudio.sln --configuration Release --no-restore
+      - name: Test
+        run: dotnet test KroStudio.sln --configuration Release --no-build
+
+  helm:
+    name: Helm lint, render, and package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - name: Lint and render chart
+        run: |
+          helm lint deploy/k8s
+          helm template kro-studio deploy/k8s --namespace kro-studio > /tmp/kro-studio.yaml
+      - name: Package chart
+        run: helm package deploy/k8s --destination /tmp
+
+  image-and-cluster-smoke:
+    name: Docker build and Helm install smoke test
+    runs-on: ubuntu-latest
+    needs: [dotnet, helm]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: kro-studio-ci
+      - name: Build and load image
+        run: |
+          docker build -f deploy/docker/Dockerfile -t kro-studio:ci .
+          kind load docker-image kro-studio:ci --name kro-studio-ci
+      - name: Install chart and check readiness
+        run: |
+          helm upgrade --install kro-studio deploy/k8s --namespace kro-studio --create-namespace \
+            --set image.repository=kro-studio --set image.tag=ci --set image.pullPolicy=IfNotPresent \
+            --set auth.allowedHosts[0]=127.0.0.1
+          kubectl rollout status deployment/kro-studio-kro-studio -n kro-studio --timeout=180s
+          kubectl port-forward -n kro-studio svc/kro-studio-kro-studio 18080:80 >/tmp/kro-port-forward.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18080/ready; then exit 0; fi
+            sleep 2
+          done
+          cat /tmp/kro-port-forward.log
+          kubectl logs -n kro-studio deployment/kro-studio-kro-studio
+          exit 1

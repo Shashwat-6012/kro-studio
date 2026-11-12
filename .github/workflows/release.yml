@@ -6,15 +6,25 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
+  quality:
+    name: Run build and Helm validation
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   release:
+    name: Publish and release
+    needs: quality
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
     steps:
       - name: Check out source
         uses: actions/checkout@v4
