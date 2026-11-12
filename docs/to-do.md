@@ -1,6 +1,6 @@
 # Pending work
 
-This list was reconciled against `design-document-modes-security-deployment.md` and the current Hub, UI, and Docker files on 2026-11-03. The design doc describes an older Helm-only, pasted-token plan; current code instead supports OIDC and Kubernetes impersonation, plus local kubeconfig use. Items below are work that remains or needs an explicit security verification.
+This list was reconciled against `design-document-modes-security-deployment.md` and the current Hub, UI, and deployment files on 2026-11-11. The old Helm-only, pasted-token plan is superseded; current code supports OIDC and Kubernetes impersonation, plus local kubeconfig use. Items below are work that remains or needs an explicit security verification.
 
 ## Security and authentication
 
@@ -26,10 +26,10 @@ This list was reconciled against `design-document-modes-security-deployment.md` 
 
 ## Release and documentation
 
-- [ ] Add the release workflow: build and publish linux/amd64 and linux/arm64 images, package and publish the Helm chart as OCI, run the install smoke test, and create a GitHub Release with notes and checksums.
+- [x] Add the release workflow: build and publish linux/amd64 and linux/arm64 images, package and publish the Helm chart as OCI, run the install smoke test, and create a GitHub Release with notes and checksums.
 - [ ] Publish a release candidate and install it on a clean cluster using only the documented instructions.
-- [ ] Update the design document and deployment/authentication docs to match the implemented OIDC/impersonation and local-development model. Remove or mark as superseded the pasted-ServiceAccount-token flow, Helm-only scope, and development-only kubeconfig prohibition.
-- [ ] Document the shared-deployment threat model, authentication requirements, trusted proxy and TLS setup, least-privilege Kubernetes permissions, and the risk of enabling the unauthenticated local mode.
+- [x] Update the design document and deployment/authentication docs to match the implemented OIDC/impersonation and local-development model. Remove or mark as superseded the pasted-ServiceAccount-token flow, Helm-only scope, and development-only kubeconfig prohibition.
+- [x] Document the shared-deployment threat model, authentication requirements, trusted proxy and TLS setup, least-privilege Kubernetes permissions, and the risk of enabling the unauthenticated local mode.
 
 ## Product follow-ups
 
@@ -45,7 +45,7 @@ This list was reconciled against `design-document-modes-security-deployment.md` 
 
 - The Hub serves the built UI and API on the same origin from one process; nginx and supervisord are not part of the current image.
 - OIDC authorization-code login, PKCE, server-side authentication tickets, CSRF request tokens, API authorization, and Kubernetes impersonation are implemented. These replace the design doc’s pasted-token v0.1 login proposal, but the security hardening tasks above remain.
-- The Docker runtime already uses a non-root user. The chart’s pod security context and read-only filesystem are still outstanding.
+- The Docker runtime and chart use a non-root user; the chart also uses a read-only root filesystem and hardened pod security settings.
 - Composed-resource inspection skips Secret objects. This does not by itself verify every API response path.
 - Kubernetes-backed error mapping already distinguishes 401 authentication failures from 403 permission failures; clearer, consistent UI detail remains open.
 - Local kubeconfig support is part of the current local-first workflow, so the old requirement to prohibit kubeconfig outside Development is superseded by the current product design.

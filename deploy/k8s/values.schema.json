@@ -25,7 +25,7 @@
     "session": { "type": "object", "additionalProperties": false, "required": ["lifetimeHours"], "properties": { "lifetimeHours": { "type": "integer", "minimum": 1, "maximum": 24 } } },
     "readOnly": { "type": "boolean" },
     "resources": { "type": "object", "additionalProperties": false, "required": ["requests", "limits"], "properties": {
-      "requests": { "$ref": "#/definitions.resourceValues" }, "limits": { "$ref": "#/definitions.resourceValues" }
+      "requests": { "$ref": "#/definitions/resourceValues" }, "limits": { "$ref": "#/definitions/resourceValues" }
     } },
     "ingress": { "type": "object", "additionalProperties": false, "required": ["enabled", "className", "annotations", "host", "tls"], "properties": {
       "enabled": { "type": "boolean" }, "className": { "type": "string" }, "annotations": { "type": "object", "additionalProperties": { "type": "string" } }, "host": { "type": "string", "minLength": 1 },

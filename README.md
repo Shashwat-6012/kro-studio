@@ -1,6 +1,6 @@
 # KRO Studio
 
-KRO Studio is a local-first workspace for managing KRO ResourceGraphDefinitions and their generated custom resource APIs. The backend is an independent ASP.NET Core API. The React/Vite UI remains a separate project and is not built, copied, or served by the backend.
+KRO Studio is a local-first workspace for managing KRO ResourceGraphDefinitions and their generated custom resource APIs. The ASP.NET Core Hub and React/Vite UI run as separate projects during development; the release image builds the UI into the Hub so one process serves the app and API.
 
 ## Projects
 
@@ -21,7 +21,7 @@ Run the API and UI as separate processes:
 2. In another terminal, start the UI with `cd src/Web`, then `npm run dev`.
 3. Open the Vite URL printed in the UI terminal (normally `http://localhost:5173`).
 
-The API exposes its versioned routes under `/api/v1` and a liveness endpoint at `/health`. In local development, Vite serves the UI and forwards `/api` requests to the API. The Docker image copies the built UI into the Hub's `wwwroot`, where the Hub serves static assets and the SPA fallback. If a separately hosted UI calls the API directly, add its origin to `Cors:AllowedOrigins` in API configuration.
+The API exposes its versioned routes under `/api/v1`, a liveness endpoint at `/health`, and Kubernetes-backed readiness at `/ready`. In local development, Vite serves the UI and forwards `/api` requests to the API. The Docker image builds the UI into the Hub's `wwwroot`, where the Hub serves static assets and the SPA fallback. If a separately hosted UI calls the API directly, add its origin to `Cors:AllowedOrigins` in API configuration.
 
 Both processes can start without a cluster. The API reports a disconnected state until Kubernetes is reachable. Set `KUBECONFIG` and optionally `KUBECONTEXT` before starting the API, or set `Kubernetes:KubeconfigPath` and `Kubernetes:Context` in configuration. Credentials remain on the backend.
 
@@ -39,6 +39,12 @@ When a cluster is connected but KRO's `ResourceGraphDefinition` API is missing, 
 
 Validation uses Kubernetes server-side dry-run and does not persist the RGD. KRO acceptance is reported later through the stored RGD conditions. Dynamic API discovery does not enable instance operations until the resource is present in API discovery.
 
+## Deploy with Helm
+
+Shared and release deployments require OIDC. The chart uses a single pod with the Kubernetes ServiceAccount as its cluster identity; the chart intentionally creates no RoleBindings. Before exposing it, configure an OIDC provider, TLS, the allowed hostname, trusted proxy addresses where applicable, and only the Kubernetes permissions the intended workflows need. The [Helm deployment guide](deploy/k8s/README.md) has the full setup. The [authentication and RBAC guide](docs/authentication-and-rbac.md) explains the identity choices and permissions.
+
+The chart and image are published by pushing a version tag such as `v0.1.0-rc1`. The [release workflow](.github/workflows/release.yml) builds both supported image architectures, publishes the OCI chart, installs it on a fresh kind cluster, checks `/ready`, and creates a GitHub Release with generated notes and artifact checksums after the smoke install passes.
+
 ## Run the UI and API in Docker
 
 Compose builds one image containing the React UI and ASP.NET Core Hub. The Hub serves the UI from `wwwroot`, provides the SPA fallback, and handles `/api` requests on the same origin. The Hub reads the mounted kubeconfig.
@@ -48,7 +54,7 @@ $env:KUBECONFIG_PATH = "$HOME\.kube\config"
 docker compose -f deploy/docker/docker-compose.yml up --build
 ```
 
-Open `http://127.0.0.1:8080` to use the UI. The UI and `/api/v1` endpoints share that origin; `http://127.0.0.1:8080/health` checks the Hub. Set `UI_PORT` to change the host port and `KUBECONTEXT` to select a kubeconfig context. Compose publishes one port for the combined Hub and UI. Do not expose the unauthenticated MVP UI/API to a shared network; cluster operations use the configured kubeconfig identity.
+Open `http://127.0.0.1:8080` to use the UI. The UI and `/api/v1` endpoints share that origin; `/health` checks liveness and `/ready` checks Kubernetes API readiness. Set `UI_PORT` to change the host port and `KUBECONTEXT` to select a kubeconfig context. Compose publishes one port for the combined Hub and UI. Keep this local workflow private; cluster operations use the configured kubeconfig identity. For shared access, use the OIDC-protected Helm deployment.
 
 ## Current backend capabilities
 
