@@ -1,6 +1,6 @@
 # KRO Studio Authentication and RBAC Design
 
-**Status:** Implemented configuration modes; deployment-specific OIDC and Kubernetes credentials are operator supplied
+**Status:** Current authentication and authorization behavior
 **Audience:** Contributors, cluster administrators, and users deploying KRO Studio  
 **Related documents:** [Architecture and design](architecture-and-design.md), [project blueprint](kro-studio-project-documentation.md)
 
@@ -8,16 +8,16 @@ This document specifies how a person accesses KRO Studio, how the backend authen
 
 ## 1. Decisions and boundaries
 
-The MVP is a single-user, local-first application instance. Its backend reads a kubeconfig provided at runtime and uses the identity selected by that kubeconfig. The browser talks only to the same-origin KRO Studio API; it never receives Kubernetes tokens, client keys, certificates, or kubeconfig contents. Kubernetes authenticates the backend's requests and authorizes each request using the effective Kubernetes identity's RBAC grants.
+KRO Studio supports local kubeconfig use and OIDC-authenticated deployments. The browser talks only to the same-origin KRO Studio API; it never receives Kubernetes tokens, client keys, certificates, or kubeconfig contents. Kubernetes authenticates the backend's requests and authorizes each request using the effective Kubernetes identity's RBAC grants.
 
-| Concern | MVP design | Later/shared deployment |
+| Concern | Local development | Shared deployment |
 | --- | --- | --- |
-| Person to KRO Studio | `UserAuth:Mode=none` for local use, or OIDC authorization-code sign-in with an opaque cookie backed by a server-side authentication ticket | OIDC provider configured by `UserAuth:Oidc:*` |
-| KRO Studio backend to Kubernetes | `Kubernetes:AuthMode=serviceAccount` uses runtime kubeconfig by default; `Kubernetes:InCluster=true` uses the pod's service account | `Kubernetes:AuthMode=impersonation` forwards the authenticated OIDC username and configured group claims as Kubernetes impersonation headers |
+| Person to KRO Studio | OIDC authorization-code sign-in with an opaque cookie backed by a server-side authentication ticket; `none` is restricted to local Development listeners | OIDC provider configured by `UserAuth:Oidc:*` |
+| KRO Studio backend to Kubernetes | `Kubernetes:AuthMode=serviceAccount` uses the runtime kubeconfig locally or the pod's service account with in-cluster configuration | `Kubernetes:AuthMode=impersonation` uses a kubeconfig base identity and forwards verified OIDC username/group claims as Kubernetes impersonation headers |
 | Kubernetes authorization | Kubernetes RBAC is authoritative; no permission is inferred from hidden UI controls | Still authoritative; application identity-to-cluster identity mapping must be designed before team access |
 | Credential delivery | Runtime file/configuration to backend only; never image, repository, or browser bundle | Secret and identity lifecycle must be owned by the deployment platform |
 
-OIDC user authentication and Kubernetes authentication are independent settings. Impersonation requires `UserAuth:Mode=oidc`; OIDC establishes the caller and the Kubernetes client uses a configured kubeconfig identity that must be authorized to impersonate the requested users and groups. Service-account mode shares the configured backend Kubernetes identity across signed-in users. Do not expose `UserAuth:Mode=none` to untrusted networks.
+OIDC user authentication and Kubernetes authentication are independent settings. Impersonation requires `UserAuth:Mode=oidc`; OIDC establishes the caller and the Kubernetes client uses a configured kubeconfig identity that must be authorized to impersonate the requested users and groups. The Helm chart uses the pod service account for Kubernetes calls, so its permissions are shared by signed-in users. Do not expose `UserAuth:Mode=none` to untrusted networks; the Hub rejects it outside local Development listeners.
 
 ### Runtime configuration
 
@@ -80,17 +80,17 @@ The first hop is **user-to-application authentication**. It determines who may u
 - The error identifies the attempted action and resource type/scope where Kubernetes provides that information, without exposing credentials.
 - The UI may disable an operation when known to be unavailable, but every operation is still authorized by the API server. UI visibility is not a security boundary.
 
-### 3.3 Authenticate a user in a future shared deployment
+### 3.3 Authenticate users in a shared deployment
 
 **As a team member,** I want to sign in through the organization's approved identity provider before using a shared KRO Studio deployment, so that an unauthenticated visitor cannot use the app's Kubernetes identity.
 
-**Acceptance criteria for that future capability**
+**Behavior and operator requirements**
 
-- The shared deployment has an explicit, supported user authentication configuration and denies anonymous access by default.
-- The application validates the authenticated identity on every protected request and applies an explicit policy to it.
-- The design states whether all users share a service account or whether users map to distinct Kubernetes identities. No implicit identity forwarding or impersonation is allowed.
-- Session protection, logout, CSRF protections where cookie sessions are used, TLS termination, trusted proxy headers, and authorization failure behavior are documented.
-- If all users share one Kubernetes service account, the UI clearly describes that cluster operations execute with that shared identity; app-level roles do not replace Kubernetes RBAC.
+- Configure OIDC and its callback URI before exposing the service; anonymous mode is not available in release deployments.
+- Choose explicitly between the chart's shared pod identity and OIDC impersonation backed by a kubeconfig identity authorized to impersonate the mapped users/groups.
+- Protect OIDC client secrets and kubeconfig credentials as runtime secrets. Apply TLS and configure exact trusted proxy and allowed host values.
+- Treat Kubernetes RBAC as the authorization boundary. In shared service-account mode, all signed-in users have the effective permissions of that account.
+- The Hub validates sessions and CSRF tokens for unsafe requests and logout. Tickets are server-side; the default cache is in memory and the chart runs one replica.
 
 ## 4. Kubernetes API server authentication design
 
@@ -102,7 +102,7 @@ The first hop is **user-to-application authentication**. It determines who may u
 4. Kubernetes authenticates the principal, then its configured authorizer (RBAC in the expected deployment) decides each request based on verb, API group/resource, subresource, namespace, and name.
 5. KRO Studio maps the response into a stable application result. `401`/authentication failures, `403`/authorization failures, connectivity errors, and KRO capability gaps remain distinct.
 
-KRO Studio does not implement Kubernetes authentication, mint tokens, store a second cluster credential, or use Kubernetes impersonation in the MVP. Credential refresh is performed by the Kubernetes client/configured provider. A kubeconfig can reference executable credential plugins; since those commands run with the backend process's privileges, deployments must mount only trusted configuration and provide required executables intentionally.
+KRO Studio does not mint Kubernetes tokens or upload credentials from the browser. Credential refresh is performed by the Kubernetes client/configured provider. Kubeconfig exec plugins run with the backend process's privileges; mount only trusted configuration and provide required executables intentionally. In impersonation mode, the configured kubeconfig identity authenticates to Kubernetes and the Hub adds impersonation headers based only on the authenticated OIDC identity and configured claims.
 
 ### 4.2 Credential handling requirements
 
@@ -212,25 +212,22 @@ Each finding should include identity, check, status (`allowed`, `denied`, `unkno
 
 The advisor is diagnostic, not a security boundary. Its output is time-sensitive and can become stale when bindings, admission policy, API discovery, or the RGD changes. Display when checks ran and provide a recheck action. A complete success means only that the checked operations were authorized at that time; it does not prove that KRO can successfully reconcile every valid RGD.
 
-## 7. Implementation sequence / story breakdown
+## 7. Implementation status and operator checks
 
-The initial vertical slice for Kubernetes server authentication should follow this order:
+The following behavior is implemented; operators remain responsible for configuring and validating their own identity provider, credentials, and RBAC:
 
-1. Add runtime configuration for kubeconfig path/context, with safe defaults for local use and clear startup diagnostics.
-2. Add a single Kubernetes client factory used by connection checks and feature services; avoid creating clients from request-supplied credentials.
-3. Implement a connection check and API discovery check; report authentication, connectivity, and authorization outcomes separately.
-4. Add typed handling for Kubernetes `Unauthorized` and `Forbidden` responses, including operation/resource metadata where safe.
-5. Verify read-only RGD discovery, then add RGD dry-run/write and dynamic instance operations using the same client identity.
-6. Document and exercise minimum RBAC profiles against a disposable cluster, including read-only, missing permission, namespace-bound, and cluster-scoped cases.
-7. The implemented RBAC advisor probes the studio identity, checks controller requirements derived from RGD API discovery, reads RGD conditions/events, and falls back to an explicitly labeled RBAC rule estimate when controller SubjectAccessReview is unavailable.
-8. Before any shared deployment mode, implement and document user authentication, deployment identity mapping, session protections, and an explicit policy for shared service-account access.
+1. Set `Kubernetes:AuthMode` explicitly for the intended mode. Use `KUBECONFIG` / `KUBECONTEXT` or `Kubernetes:KubeconfigPath` / `Kubernetes:Context` for a local kubeconfig. The chart configures in-cluster service-account mode.
+2. For shared use, configure OIDC, `auth.allowedHosts`, TLS, and trusted proxies. Keep the OIDC client secret in a Kubernetes Secret referenced by the chart.
+3. Grant only the permissions required by intended features. The chart creates no role bindings; review the permission matrix above and use namespace RoleBindings where possible.
+4. Choose service-account mode when a shared Kubernetes identity is intentional. Choose impersonation only when the provider's username/group claims are trustworthy and the base identity is limited to the intended impersonation subjects.
+5. Validate the actual operations against the target cluster. Discovery and permission summaries are not a substitute for Kubernetes authorization on each request.
 
-## 8. Out of scope for the MVP
+## 8. Out of scope
 
 - A username/password database or local account administration UI.
-- Browser-held Kubernetes credentials, direct browser-to-cluster API calls, or kubeconfig upload.
-- Kubernetes impersonation, token exchange, or per-user credential brokering.
-- A shared in-cluster service account deployment advertised as secure for multiple users.
+- Browser-held Kubernetes credentials, token paste, direct browser-to-cluster API calls, or kubeconfig upload.
+- Persistent or multi-replica session storage by default; the chart is limited to one replica.
+- Application roles that replace Kubernetes RBAC.
 - Automatic RBAC changes without a reviewed plan and explicit confirmation; editing or deleting existing RBAC objects.
 - Broad arbitrary resource management beyond the documented KRO workflows.
 
