@@ -45,6 +45,10 @@ Shared and release deployments require OIDC. The chart uses a single pod with th
 
 The chart and image are published by pushing a version tag such as `v0.1.0-rc1`. The [release workflow](.github/workflows/release.yml) builds both supported image architectures, publishes the OCI chart, installs it on a fresh kind cluster, checks `/ready`, and creates a GitHub Release with generated notes and artifact checksums after the smoke install passes.
 
+## Continuous integration
+
+The [Build and chart validation workflow](.github/workflows/ci.yml) runs on every pull request and branch push, including merge commits. It restores, builds, and tests the .NET solution; lints, renders, and packages the Helm chart; then builds the Docker image and installs the chart on a fresh kind cluster to check `/ready`. The release workflow calls these same checks before it publishes any image or chart. The repository currently has no dedicated .NET test project, so `dotnet test` runs successfully but does not yet execute test cases.
+
 ## Run the UI and API in Docker
 
 Compose builds one image containing the React UI and ASP.NET Core Hub. The Hub serves the UI from `wwwroot`, provides the SPA fallback, and handles `/api` requests on the same origin. The Hub reads the mounted kubeconfig.

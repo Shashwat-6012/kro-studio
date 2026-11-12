@@ -45,8 +45,9 @@ Liveness uses the built-in `--healthcheck` command and `/health`; readiness prob
 which reports ready only after the configured Kubernetes API responds.
 
 Validate locally with `helm lint deploy/k8s` and `helm template kro-studio deploy/k8s`.
-The `Kubernetes chart` workflow also installs the chart on a fresh kind cluster and
-waits for `/ready`.
+The `Build and chart validation` workflow runs on pull requests and branch updates. It
+also installs the chart on a fresh kind cluster and waits for `/ready`; the release
+workflow reuses these checks before publishing.
 
 ## Install a published release
 
